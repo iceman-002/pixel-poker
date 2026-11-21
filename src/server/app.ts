@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { Room, send, type Member } from './room.js';
 import { sanitizeRules } from '../shared/rules.js';
 import type { C2S } from '../shared/protocol.js';
+import { serveIcon } from './icons.js';
 
 export interface ServerOpts { port: number; staticDir?: string; handDelay?: number; grace?: number }
 
@@ -39,6 +40,7 @@ export function startServer(o: ServerOpts): Promise<{ port: number; close: () =>
   const byToken = new Map<string, { room: Room; member: Member }>();
   const server = http.createServer((req, res) => {
     if (req.url === '/healthz') { res.writeHead(200).end('ok'); return; }
+    if (serveIcon(req.url ?? '', res)) return;
     serveStatic(root, req, res);
   });
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 });
@@ -76,14 +78,14 @@ export function startServer(o: ServerOpts): Promise<{ port: number; close: () =>
           const room = new Room(newCode(), opts);
           if (msg.rules && typeof msg.rules === 'object') room.rules = sanitizeRules(msg.rules);
           rooms.set(room.code, room);
-          return bind(room, room.addMember(msg.name, msg.avatar));
+          return bind(room, room.addMember(msg.name, msg.avatar, msg.back));
         }
         const room = rooms.get(String(msg.room ?? '').toUpperCase().slice(0, 4));
         if (!room) return err('Room not found');
         const prev = typeof msg.token === 'string' ? byToken.get(msg.token) : undefined;
         if (prev && prev.room === room && room.members.get(prev.member.id) === prev.member) return bind(room, prev.member);
         if (room.members.size >= 16) return err('Room is full');
-        return bind(room, room.addMember(msg.name, msg.avatar));
+        return bind(room, room.addMember(msg.name, msg.avatar, msg.back));
       }
       if (!cur) return err('Join a room first');
       if (msg.t === 'leave') {

@@ -1,12 +1,14 @@
 // Turns server events into animations, then snaps the scene to the authoritative state.
 import type { Ev } from '../shared/engine.js';
+import type { FEv } from '../shared/floor.js';
+import { floorEvent } from './flooranim';
 import type { RoomView } from '../shared/protocol.js';
 import { VARIANTS } from '../shared/rules.js';
 import { Scene, POT, DECK, newCard, fmt, type P } from './scene';
 import { E } from './fx';
 import { sfx } from './audio';
 
-type Item = { s: RoomView; ev: Ev[]; at: number };
+type Item = { s: RoomView; ev: (Ev | FEv)[]; at: number };
 type ActEv = Extract<Ev, { t: 'act' }>;
 type ShowEv = Extract<Ev, { t: 'showdown' }>;
 type StreetEv = Extract<Ev, { t: 'street' }>;
@@ -16,9 +18,9 @@ export class Animator {
   private busy = false;
   private pending: Promise<void>[] = [];
   private lastLevel = '';
-  constructor(private sc: Scene, private onSynced: (s: RoomView) => void) {}
+  constructor(public sc: Scene, private onSynced: (s: RoomView) => void) {}
 
-  push(s: RoomView, ev: Ev[]) {
+  push(s: RoomView, ev: (Ev | FEv)[]) {
     this.q.push({ s, ev, at: performance.now() });
     if (!this.busy) void this.run();
   }
@@ -37,14 +39,14 @@ export class Animator {
     this.busy = false;
   }
 
-  private wait = (s: number) => this.sc.tw.wait(s);
+  wait = (s: number) => this.sc.tw.wait(s);
   private async settle() { await Promise.all(this.pending); this.pending = []; }
 
   private async play({ s, ev }: Item) {
     this.sc.me = s.seat;
     // Hide the stale turn ring while streets / showdown animate.
-    if (this.sc.s?.hand && ev.some((e) => e.t === 'street' || e.t === 'showdown' || e.t === 'deal')) this.sc.s.hand.toAct = -1;
-    if (ev.some((e) => e.t === 'deal')) { this.sc.resetHand(); this.sc.dim.v = 0; this.sc.pot.set(0, true); }
+    if (this.sc.s?.hand && ev.some((e) => ['street', 'showdown', 'deal', 'fdeal', 'fpay', 'fduel', 'fboss'].includes(e.t))) this.sc.s.hand.toAct = -1;
+    if (ev.some((e) => e.t === 'deal' || e.t === 'fdeal')) { this.sc.resetHand(); this.sc.dim.v = 0; this.sc.pot.set(0, true); }
     let bomb = false;
     for (const e of ev) {
       switch (e.t) {
@@ -68,19 +70,20 @@ export class Animator {
         case 'street': await this.settle(); await this.street(s, e); break;
         case 'twice': this.banner('RUN IT TWICE!', 14); await this.wait(0.8); break;
         case 'showdown': await this.settle(); await this.showdown(s, e); break;
+        default: await this.settle(); await floorEvent(this, s, e); break;
       }
     }
     await this.settle();
   }
 
-  private banner(text: string, c = 10) {
+  banner(text: string, c = 10) {
     const b = { text, c, s: 0, life: 1.4 };
     this.sc.banner = b;
     void this.sc.tw.to(b, { s: 1 }, 0.25, E.outBack);
   }
 
   /** Chips toss in an arc from a seat to its bet spot (or the pot). */
-  private async chips(seat: number, amt: number, toPot: boolean) {
+  async chips(seat: number, amt: number, toPot: boolean) {
     if (amt <= 0) return;
     const sc = this.sc, f = sc.fx[seat];
     f.stack.t -= amt;
@@ -98,7 +101,7 @@ export class Animator {
     }
   }
 
-  private async deal(s: RoomView) {
+  async deal(s: RoomView) {
     const sc = this.sc, h = s.hand!;
     sc.resetHand();
     sc.dim.v = 0;
@@ -164,7 +167,7 @@ export class Animator {
   }
 
   /** Folded cards flick toward the middle, spin and fade. */
-  private flick(seat: number) {
+  flick(seat: number) {
     const sc = this.sc, cards = sc.hole[seat], d = sc.dir(seat);
     sc.hole[seat] = [];
     for (const o of cards) {
@@ -176,7 +179,7 @@ export class Animator {
   }
 
   /** Bets slide into the pot. */
-  private async gather() {
+  async gather() {
     const sc = this.sc, ps: Promise<void>[] = [];
     sc.fx.forEach((f, i) => {
       const amt = Math.round(f.bet.t);
@@ -252,7 +255,7 @@ export class Animator {
   }
 
   /** Pot sweeps to the winner with a sparkle trail; stack counts up. */
-  private async sweep(seat: number, amt: number) {
+  async sweep(seat: number, amt: number) {
     const sc = this.sc, to: P = sc.seatPos(seat);
     sc.pot.t = Math.max(0, sc.pot.t - amt);
     const fl = { fx: POT.x, fy: POT.y, tx: to.x, ty: to.y, k: 0, amt, trail: true };

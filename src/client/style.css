@@ -110,6 +110,7 @@ input:disabled, select:disabled { background: var(--mute); opacity: .8; }
 .sheet.open { transform: none; visibility: visible; transition: transform .3s cubic-bezier(.34, 1.56, .64, 1); }
 .sheet .amt { text-align: center; font-size: calc(var(--u) * 6); }
 .sheet .amt b { color: var(--gold); font-size: calc(var(--u) * 10); display: block; }
+.sheet .amt i { display: block; font-style: normal; color: var(--mute); font-size: calc(var(--u) * 4.5); min-height: 1em; }
 .quick { display: flex; gap: calc(var(--u) * 3); }
 .quick .btn, .sheet .row .btn { flex: 1; }
 input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: calc(var(--u) * 6); background: #000; border: 0; padding: 0; }
@@ -140,3 +141,17 @@ input[type=range]::-moz-range-thumb { width: calc(var(--u) * 10); height: calc(v
 @media (orientation: landscape) and (max-height: 500px) {
   #rotate { display: flex; position: fixed; inset: 0; z-index: 100; background: #000; color: var(--gold); align-items: center; justify-content: center; }
 }
+
+/* Customize */
+.mebtn { display: flex; align-items: center; gap: calc(var(--u) * 5); background: rgba(0, 0, 0, .35); border: var(--u) solid #000; padding: calc(var(--u) * 3) calc(var(--u) * 6); color: var(--gold); font: inherit; font-size: calc(var(--u) * 6); }
+.cb { width: calc(var(--u) * 22); height: calc(var(--u) * 31); image-rendering: pixelated; border: var(--u) solid transparent; }
+.cb.sel { border-color: var(--gold); transform: translateY(calc(var(--u) * -2)); }
+.cust { max-height: 92%; overflow-y: auto; gap: calc(var(--u) * 4); }
+.cust h3 { font-size: calc(var(--u) * 5); color: var(--mute); text-align: center; }
+.avbig { display: flex; justify-content: center; }
+.avbig .av { width: calc(var(--u) * 48); height: calc(var(--u) * 48); background: var(--plum); }
+.part { display: flex; align-items: center; gap: calc(var(--u) * 3); font-size: calc(var(--u) * 5); }
+.part span { flex: 1; text-align: center; }
+.part b { color: var(--gold); }
+.grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: calc(var(--u) * 2); justify-items: center; }
+.grid.faces { grid-template-columns: repeat(3, 1fr); background: #0b4d2c; padding: calc(var(--u) * 3); }

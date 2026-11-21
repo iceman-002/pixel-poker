@@ -3,10 +3,12 @@ import type { RoomView, S2C } from '../shared/protocol.js';
 import { Net, type NetStatus } from './net';
 import { Scene, W, H } from './scene';
 import { Animator } from './anim';
+import { drawScene } from './render';
+import { floorAsHand } from './flooranim';
 import { Controls } from './controls';
 import { Lobby, renderHome } from './lobby';
 import { settings, saveSettings } from './settings';
-import { unlockAudio, sfx } from './audio';
+import { sfx } from './audio';
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
@@ -86,13 +88,13 @@ function show(n: Scr, render?: () => void) {
 
 function openSettings() {
   const m = $('#modal');
-  const row = (k: keyof typeof settings, l: string) => `<label class="rule"><span>${l}</span><input type="checkbox" data-s="${k}" ${settings[k] ? 'checked' : ''}></label>`;
+  const row = (k: 'sound' | 'reduced' | 'fourColor', l: string) => `<label class="rule"><span>${l}</span><input type="checkbox" data-s="${k}" ${settings[k] ? 'checked' : ''}></label>`;
   m.innerHTML = `<div class="panel"><h2>SETTINGS</h2>${row('sound', 'SOUND')}${row('reduced', 'REDUCED MOTION')}${row('fourColor', '4-COLOR DECK')}
     <button class="btn gold" id="mclose">DONE</button></div>`;
   m.classList.add('open');
   m.onchange = (e) => {
     const t = e.target as HTMLInputElement;
-    settings[t.dataset.s as keyof typeof settings] = t.checked;
+    (settings as unknown as Record<string, boolean>)[t.dataset.s!] = t.checked;
     saveSettings();
   };
   m.onclick = (e) => { if (e.target === m || (e.target as HTMLElement).id === 'mclose') { sfx('click'); m.classList.remove('open'); } };
@@ -112,6 +114,10 @@ function renderHud() {
     const ms = Math.max(0, nl.in - (performance.now() - hudAt));
     next = ` · UP ${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
   }
+  if (s.rules.variant === 'floor') {
+    $('#tlevel').innerHTML = `FLOOR DEAL #${s.handNo}<br>${s.rules.goal ? 'FIRST TO ' + s.rules.goal.toLocaleString() : 'LAST ONE STANDING'}`;
+    return;
+  }
   const wild = s.rules.wild === 'none' ? '' : s.rules.wild === 'jokers' ? ' JOKERS' : ' 2S WILD';
   $('#tlevel').innerHTML = `${s.rules.betting.toUpperCase()} ${VNAME[s.rules.variant]}${wild} #${s.handNo}<br>${lv.sb}/${lv.bb}${lv.ante ? ` A${lv.ante}` : ''}${next}`;
 }
@@ -129,6 +135,7 @@ const anim = new Animator(sc, (s) => { controls.update(s); hud(s); });
 function onMsg(m: S2C) {
   switch (m.t) {
     case 'state':
+      if (m.s.floor) m.s.hand = floorAsHand(m.s);
       anim.push(m.s, m.ev);
       if (m.s.phase === 'lobby') show('lobby', () => lobby.update(m.s));
       else show('table');
@@ -157,7 +164,6 @@ cv.addEventListener('pointerdown', (e) => {
   const r = cv.getBoundingClientRect();
   sc.hit(((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H);
 });
-addEventListener('pointerdown', unlockAudio, { once: true });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 const sess = net.session;
@@ -173,7 +179,7 @@ function frame(now: number) {
   lastT = now;
   if (!document.hidden) {
     sc.update(dt);
-    if (screen === 'table') { ctx.clearRect(0, 0, W, H); sc.draw(ctx); }
+    if (screen === 'table') { ctx.clearRect(0, 0, W, H); drawScene(sc, ctx); }
   }
   requestAnimationFrame(frame);
 }
@@ -183,6 +189,8 @@ document.addEventListener('visibilitychange', () => { lastT = performance.now();
 // Debug hook (?debug): step frames manually when rAF is throttled.
 if (params.has('debug')) {
   Object.assign(window, {
-    pp: { sc, step: (sec: number) => { for (let t = 0; t < sec; t += 1 / 60) sc.update(1 / 60); ctx.clearRect(0, 0, W, H); sc.draw(ctx); } },
+    pp: { sc, step: (sec: number) => { for (let t = 0; t < sec; t += 1 / 60) sc.update(1 / 60); ctx.clearRect(0, 0, W, H); drawScene(sc, ctx); } },
   });
 }
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js').catch(() => undefined); });

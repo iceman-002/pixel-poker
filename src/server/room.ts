@@ -1,17 +1,21 @@
 import { randomUUID, randomInt } from 'node:crypto';
 import { WebSocket } from 'ws';
-import { startHand, applyAction, autoAction, legal, viewFor, type Hand } from '../shared/engine.js';
+import { startHand, applyAction, autoAction, legal, viewFor, type Hand, type Action, type Ev } from '../shared/engine.js';
+import { startFloor, applyFloor, autoFloor, floorLegal, floorView, type Floor, type FAction, type FEv } from '../shared/floor.js';
 import { DEFAULT_RULES, sanitizeRules, levelAt, type Rules } from '../shared/rules.js';
-import { MAX_SEATS, AVATARS, MAX_NAME, type C2S, type RoomView, type S2C } from '../shared/protocol.js';
+import { MAX_SEATS, MAX_NAME, AVATAR_MAX, CARD_BACKS, type C2S, type RoomView, type S2C } from '../shared/protocol.js';
 
 export interface Member {
-  id: string; token: string; name: string; avatar: number; seat: number;
-  stack: number; bought: boolean; rebuys: number; ready: boolean; ws: WebSocket | null; leaving: boolean;
+  id: string; token: string; name: string; avatar: number; back: number; seat: number;
+  stack: number; bought: boolean; rebuys: number; skips: number; ready: boolean; ws: WebSocket | null; leaving: boolean;
 }
 export interface RoomOpts { handDelay: number; grace: number }
+type Game = { done: boolean; toAct: number; events: unknown[]; seats: ({ id: string; stack: number } | null)[] };
 
+const clampInt = (v: unknown, max: number) => Math.min(max - 1, Math.max(0, Math.floor(Number(v)) || 0));
 export const cleanName = (v: unknown) => String(v ?? '').replace(/[^\w .!?'-]/g, '').trim().slice(0, MAX_NAME) || 'Player';
-export const cleanAvatar = (v: unknown) => Math.abs(Math.floor(Number(v)) || 0) % AVATARS;
+export const cleanAvatar = (v: unknown) => clampInt(v, AVATAR_MAX);
+export const cleanBack = (v: unknown) => clampInt(v, CARD_BACKS);
 
 export class Room {
   members = new Map<string, Member>();
@@ -20,6 +24,8 @@ export class Room {
   rules: Rules = { ...DEFAULT_RULES };
   host = '';
   hand: Hand | null = null;
+  floor: Floor | null = null;
+  winner = '';
   handNo = 0;
   dealer = -1;
   startedAt = 0;
@@ -32,13 +38,17 @@ export class Room {
 
   constructor(public code: string, private opts: RoomOpts) {}
 
-  addMember(name: unknown, avatar: unknown): Member {
+  private game(): Game | null { return this.floor ?? this.hand; }
+
+  addMember(name: unknown, avatar: unknown, back: unknown): Member {
     const m: Member = {
-      id: randomUUID().slice(0, 8), token: randomUUID(), name: cleanName(name), avatar: cleanAvatar(avatar),
-      seat: -1, stack: 0, bought: false, rebuys: 0, ready: false, ws: null, leaving: false,
+      id: randomUUID().slice(0, 8), token: randomUUID(), name: cleanName(name), avatar: cleanAvatar(avatar), back: cleanBack(back),
+      seat: -1, stack: 0, bought: false, rebuys: 0, skips: 0, ready: false, ws: null, leaving: false,
     };
     this.members.set(m.id, m);
     if (!this.host) this.host = m.id;
+    const free = this.seats.findIndex((x) => !x);
+    if (this.phase === 'lobby' && free >= 0) { this.seats[free] = m.id; m.seat = free; m.stack = this.rules.stack; m.bought = true; }
     return m;
   }
 
@@ -53,9 +63,11 @@ export class Room {
 
   connected = () => [...this.members.values()].some((m) => m.ws);
 
-  private isTurn = (m: Member) => !!this.hand && !this.hand.done && m.seat >= 0 && this.hand.toAct === m.seat;
+  private isTurn = (m: Member) => { const g = this.game(); return !!g && !g.done && m.seat >= 0 && g.toAct === m.seat; };
   private inLiveHand = (m: Member) => {
-    const p = this.hand && !this.hand.done && m.seat >= 0 ? this.hand.seats[m.seat] : null;
+    if (m.seat < 0) return false;
+    if (this.floor) { const p = this.floor.seats[m.seat]; return !this.floor.done && !!p && p.id === m.id && p.status !== 'skip' && p.status !== 'beaten'; }
+    const p = this.hand && !this.hand.done ? this.hand.seats[m.seat] : null;
     return !!p && p.id === m.id && !p.folded;
   };
   private levelIdx() {
@@ -64,10 +76,9 @@ export class Room {
     if (r.blindMode === 'minutes' && this.startedAt) return Math.floor((Date.now() - this.startedAt) / 60000 / r.blindEvery);
     return 0;
   }
-
   private nextLevel(): RoomView['nextLevel'] {
     const r = this.rules, L = this.levelIdx();
-    if (this.phase !== 'playing' || r.blindMode === 'static') return null;
+    if (this.phase !== 'playing' || r.blindMode === 'static' || r.variant === 'floor') return null;
     if (r.blindMode === 'hands') return { in: (L + 1) * r.blindEvery - this.handNo, unit: 'hands' };
     return { in: Math.max(0, this.startedAt + (L + 1) * r.blindEvery * 60000 - Date.now()), unit: 'ms' };
   }
@@ -80,8 +91,9 @@ export class Room {
         if (m.id !== this.host) return 'Only the host can change rules';
         if (playing) return 'Rules are locked during play';
         this.rules = sanitizeRules({ ...this.rules, ...(msg.rules ?? {}) });
-        for (const id of this.seats) { const s = id && this.members.get(id); if (s) { s.stack = this.rules.stack; s.rebuys = 0; } }
+        for (const s of this.seated()) { s.stack = this.rules.stack; s.rebuys = 0; }
         break;
+      case 'profile': m.name = cleanName(msg.name); m.avatar = cleanAvatar(msg.avatar); m.back = cleanBack(msg.back); break;
       case 'sit': {
         const s = Math.floor(Number(msg.seat));
         if (!(s >= 0 && s < MAX_SEATS)) return 'Bad seat';
@@ -107,7 +119,8 @@ export class Room {
         if (playing) return 'Already playing';
         const seated = this.seated();
         if (seated.length < 2) return 'Need at least 2 seated players';
-        if (seated.filter((s) => s.stack > 0).length < 2) for (const s of seated) { s.stack = this.rules.stack; s.rebuys = 0; }
+        if (this.winner || seated.filter((s) => s.stack > 0).length < 2) for (const s of seated) { s.stack = this.rules.stack; s.rebuys = 0; s.skips = 0; }
+        this.winner = '';
         this.phase = 'playing';
         this.startedAt = Date.now();
         this.handNo = 0;
@@ -115,9 +128,13 @@ export class Room {
         return;
       }
       case 'act': {
-        if (!this.hand || this.hand.done || m.seat < 0) return 'No hand in progress';
-        if (this.hand.seats[m.seat]?.id !== m.id) return 'Not in this hand';
-        try { this.hand = applyAction(this.hand, m.seat, msg.action); } catch (e) { return (e as Error).message; }
+        const g = this.game();
+        if (!g || g.done || m.seat < 0) return 'No hand in progress';
+        if (g.seats[m.seat]?.id !== m.id) return 'Not in this hand';
+        try {
+          if (this.floor) this.floor = applyFloor(this.floor, m.seat, msg.action as FAction);
+          else this.hand = applyAction(this.hand!, m.seat, msg.action as Action);
+        } catch (e) { return (e as Error).message; }
         this.afterAction();
         return;
       }
@@ -153,42 +170,51 @@ export class Room {
     }
   }
 
+  private gameOver(winner: string) {
+    this.phase = 'lobby';
+    this.hand = this.floor = null;
+    this.deadline = 0;
+    this.winner = winner;
+    for (const m of this.members.values()) m.ready = false;
+    this.broadcast();
+  }
+
   private nextHand() {
     clearTimeout(this.nextTimer);
     clearTimeout(this.actTimer);
     for (const m of [...this.members.values()]) if (m.leaving) { m.leaving = false; this.remove(m); }
     if (this.phase !== 'playing') return;
-    const players = this.seats.map((id) => {
-      const m = id ? this.members.get(id) : undefined;
-      return m && m.stack > 0 ? { id: m.id, name: m.name, stack: m.stack } : null;
-    });
-    if (players.filter(Boolean).length < 2) {
-      this.phase = 'lobby';
-      this.hand = null;
-      this.deadline = 0;
-      for (const m of this.members.values()) m.ready = false;
-      this.broadcast();
-      return;
-    }
+    const live = this.seats.map((id) => { const m = id ? this.members.get(id) : undefined; return m && m.stack > 0 ? m : null; });
+    const alive = live.filter((x): x is Member => !!x);
+    const goal = this.rules.goal > 0 ? alive.find((x) => x.stack >= this.rules.goal) : undefined;
+    if (goal) return this.gameOver(goal.name);
+    if (alive.length < 2) return this.gameOver(alive.length === 1 && !this.rules.rebuys ? alive[0].name : '');
     this.handNo++;
     for (let i = 1; i <= MAX_SEATS; i++) {
       const s = (this.dealer + i + MAX_SEATS) % MAX_SEATS;
-      if (players[s]) { this.dealer = s; break; }
+      if (live[s]) { this.dealer = s; break; }
     }
-    const r = this.rules;
-    const bomb = r.bombEvery > 0 && this.handNo % r.bombEvery === 0;
-    this.hand = startHand(r, players, this.dealer, levelAt(r, this.levelIdx()), { seed: randomInt(2 ** 47), bomb });
+    const r = this.rules, seed = randomInt(2 ** 47);
+    if (r.variant === 'floor') {
+      this.hand = null;
+      this.floor = startFloor(r, live.map((m) => m && { id: m.id, name: m.name, stack: m.stack, skips: m.skips }), this.dealer, { seed });
+    } else {
+      this.floor = null;
+      const bomb = r.bombEvery > 0 && this.handNo % r.bombEvery === 0;
+      this.hand = startHand(r, live.map((m) => m && { id: m.id, name: m.name, stack: m.stack }), this.dealer, levelAt(r, this.levelIdx()), { seed, bomb });
+    }
     this.evSent = 0;
     this.afterAction();
   }
 
   private afterAction() {
-    const h = this.hand!;
+    const g = this.game()!;
     clearTimeout(this.actTimer);
-    if (h.done) {
-      for (const p of h.seats) { const m = p && this.members.get(p.id); if (m) m.stack = p.stack; }
+    if (g.done) {
+      for (const p of g.seats) { const m = p && this.members.get(p.id); if (m) m.stack = p.stack; }
+      if (this.floor) for (const p of this.floor.seats) { const m = p && this.members.get(p.id); if (m) m.skips = p.skips; }
       this.deadline = this.timerMs = 0;
-      const delay = this.opts.handDelay * (h.boards.length > 1 ? 1.5 : 1);
+      const delay = this.opts.handDelay * (this.hand && this.hand.boards.length > 1 ? 1.5 : 1);
       this.nextTimer = setTimeout(() => this.nextHand(), delay);
     } else this.armTimer();
     this.broadcast();
@@ -196,10 +222,10 @@ export class Room {
 
   private armTimer() {
     clearTimeout(this.actTimer);
-    const h = this.hand;
-    if (!h || h.done) return;
-    const seat = h.toAct;
-    const m = this.members.get(h.seats[seat]!.id);
+    const g = this.game();
+    if (!g || g.done) return;
+    const seat = g.toAct;
+    const m = this.members.get(g.seats[seat]!.id);
     let ms = this.rules.timer * 1000;
     if (!m || m.leaving) ms = 50;
     else if (!m.ws) ms = ms ? Math.min(ms, this.opts.grace) : this.opts.grace;
@@ -207,14 +233,15 @@ export class Room {
     this.deadline = ms ? Date.now() + ms : 0;
     if (!ms) return;
     this.actTimer = setTimeout(() => {
-      if (this.hand !== h) return;
-      this.hand = applyAction(h, seat, autoAction(h, seat));
+      if (this.game() !== g) return;
+      if (this.floor) this.floor = applyFloor(this.floor, seat, autoFloor(this.floor, seat));
+      else this.hand = applyAction(this.hand!, seat, autoAction(this.hand!, seat));
       this.afterAction();
     }, ms);
   }
 
   view(m: Member): RoomView {
-    const h = this.hand;
+    const h = this.hand, f = this.floor, g = this.game();
     return {
       code: this.code,
       host: this.host,
@@ -223,9 +250,9 @@ export class Room {
       seats: this.seats.map((id, i) => {
         const s = id ? this.members.get(id) : undefined;
         if (!s) return null;
-        const hp = h && !h.done ? h.seats[i] : null;
+        const gp = g && !g.done ? g.seats[i] : null;
         return {
-          id: s.id, name: s.name, avatar: s.avatar, stack: hp && hp.id === s.id ? hp.stack : s.stack,
+          id: s.id, name: s.name, avatar: s.avatar, back: s.back, stack: gp && gp.id === s.id ? gp.stack : s.stack,
           connected: !!s.ws, ready: s.ready, rebuys: s.rebuys,
         };
       }),
@@ -233,6 +260,9 @@ export class Room {
       you: m.id,
       seat: m.seat,
       hand: h ? viewFor(h, m.seat) : null,
+      floor: f ? floorView(f, m.seat) : null,
+      flegal: f && m.seat >= 0 && f.seats[m.seat]?.id === m.id ? floorLegal(f, m.seat) : null,
+      winner: this.winner,
       handNo: this.handNo,
       legal: h && m.seat >= 0 && h.seats[m.seat]?.id === m.id ? legal(h, m.seat) : null,
       level: levelAt(this.rules, this.levelIdx()),
@@ -245,9 +275,10 @@ export class Room {
   }
 
   broadcast() {
-    const ev = this.hand ? this.hand.events.slice(this.evSent) : [];
-    if (this.hand) this.evSent = this.hand.events.length;
-    for (const m of this.members.values()) send(m.ws, { t: 'state', s: this.view(m), ev });
+    const g = this.game();
+    const ev = g ? g.events.slice(this.evSent) : [];
+    if (g) this.evSent = g.events.length;
+    for (const m of this.members.values()) send(m.ws, { t: 'state', s: this.view(m), ev: ev as (Ev | FEv)[] });
   }
 
   dispose() { clearTimeout(this.actTimer); clearTimeout(this.nextTimer); }

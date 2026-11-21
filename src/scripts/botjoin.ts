@@ -2,6 +2,7 @@
 // Usage: node dist-server/scripts/botjoin.js ROOM [count=3] [url=ws://localhost:8080/ws]
 import WebSocket from 'ws';
 import type { Action } from '../shared/engine.js';
+import { floorMove, floorKey } from './floorbot.js';
 import type { C2S, RoomView, S2C } from '../shared/protocol.js';
 
 const [room = '', count = '3', url = 'ws://localhost:8080/ws'] = process.argv.slice(2);
@@ -18,12 +19,20 @@ for (let i = 0; i < Number(count); i++) {
     if (m.t === 'error') { console.log(NAMES[i], 'error:', m.msg); if (m.msg === 'Seat taken') sat = false; }
     if (m.t !== 'state') return;
     const s: RoomView = m.s;
+    if (!sat && s.seat >= 0 && s.phase === 'lobby') { sat = true; send({ t: 'ready', ready: true }); }
     if (!sat && s.seat < 0) {
       const free = s.seats.findIndex((x) => !x);
       if (free >= 0) { sat = true; send({ t: 'sit', seat: free }); send({ t: 'ready', ready: true }); }
       return;
     }
     if (s.canRebuy && rebuyHand !== s.handNo) { rebuyHand = s.handNo; send({ t: 'rebuy' }); }
+    if (s.floor) {
+      const fa = floorMove(s), fk = floorKey(s);
+      if (!fa || fk === lastKey) return;
+      lastKey = fk;
+      setTimeout(() => send({ t: 'act', action: fa }), 900 + Math.random() * 1200);
+      return;
+    }
     const h = s.hand, L = s.legal;
     if (!h || !L || h.done || h.toAct !== s.seat) return;
     const key = `${s.handNo}|${h.street}|${h.currentBet}|${h.seats.reduce((a, p) => a + (p?.total ?? 0), 0)}`;

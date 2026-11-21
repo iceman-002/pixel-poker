@@ -2,7 +2,8 @@
 import type { RoomView } from '../shared/protocol.js';
 import { PRESETS, type Rules } from '../shared/rules.js';
 import type { Net } from './net';
-import { avatar, AVATAR_COUNT } from './sprites';
+import { avatar } from './sprites';
+import { openCustomize, backCanvas } from './customize';
 import { textSprite } from './font';
 import { profile, saveProfile, store } from './settings';
 import { sfx } from './audio';
@@ -23,7 +24,7 @@ export function renderHome(el: HTMLElement, net: Net, room: string, settings: ()
       <canvas class="title" width="90" height="16"></canvas>
       <div class="sub">POKER WITH FRIENDS</div>
       <label class="field">NAME<input id="name" maxlength="12" autocomplete="off" placeholder="YOUR NAME"></label>
-      <div class="avatars" id="avs"></div>
+      <button class="mebtn" id="custom"></button>
       <button class="btn gold big" id="create">CREATE ROOM</button>
       <div class="row join"><input id="code" maxlength="4" placeholder="CODE" autocapitalize="characters" autocomplete="off">
         <button class="btn" id="join">JOIN</button></div>
@@ -31,24 +32,22 @@ export function renderHome(el: HTMLElement, net: Net, room: string, settings: ()
       <div class="hint" id="a2hs"></div>
     </div>`;
   const t = el.querySelector<HTMLCanvasElement>('.title')!.getContext('2d')!;
+  t.imageSmoothingEnabled = false;
   t.drawImage(textSprite('PIXEL', 10, 2), 0, 0, 38, 12);
   t.drawImage(textSprite('POKER', 8, 2), 44, 0, 38, 12);
   const name = el.querySelector<HTMLInputElement>('#name')!;
   const code = el.querySelector<HTMLInputElement>('#code')!;
   name.value = profile.name;
   code.value = room;
-  const avs = el.querySelector('#avs')!;
-  for (let i = 0; i < AVATAR_COUNT; i++) {
-    const c = avatarCanvas(i);
-    c.classList.toggle('sel', i === profile.avatar);
-    c.onclick = () => { profile.avatar = i; saveProfile(); sfx('tap'); avs.querySelectorAll('canvas').forEach((x, j) => x.classList.toggle('sel', j === i)); };
-    avs.appendChild(c);
-  }
+  const cb = el.querySelector<HTMLButtonElement>('#custom')!;
+  const paint = () => { cb.innerHTML = ''; cb.append(avatarCanvas(profile.avatar, 'av sel'), backCanvas(profile.back)); cb.insertAdjacentHTML('beforeend', '<span>CUSTOMIZE</span>'); };
+  paint();
+  cb.onclick = () => { sfx('click'); openCustomize(paint); };
   const ok = () => {
     profile.name = name.value.trim().slice(0, 12) || 'Player';
     saveProfile();
     sfx('click');
-    return { name: profile.name, avatar: profile.avatar };
+    return { name: profile.name, avatar: profile.avatar, back: profile.back };
   };
   el.querySelector<HTMLButtonElement>('#create')!.onclick = () => net.send({ t: 'create', ...ok() });
   const join = () => { const r = code.value.trim().toUpperCase(); if (r.length === 4) net.send({ t: 'join', room: r, ...ok() }); else code.focus(); };
@@ -56,24 +55,29 @@ export function renderHome(el: HTMLElement, net: Net, room: string, settings: ()
   code.onkeydown = (e) => { if (e.key === 'Enter') join(); };
   el.querySelector<HTMLButtonElement>('#settings')!.onclick = settings;
   if (room) el.querySelector('#create')!.classList.remove('gold');
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone;
+  if (ios && !standalone) el.querySelector('#a2hs')!.innerHTML = 'INSTALL: TAP <b>SHARE</b> THEN <b>ADD TO HOME SCREEN</b>';
 }
 
 type Field = { k: keyof Rules; l: string; o?: [string, string][]; n?: boolean; b?: boolean; show?: (r: Rules) => boolean };
+const poker = (r: Rules) => r.variant !== 'floor';
 const FIELDS: Field[] = [
-  { k: 'variant', l: 'GAME', o: [['holdem', "HOLD'EM"], ['omaha', 'OMAHA'], ['draw', '5-CARD DRAW'], ['short', 'SHORT DECK']] },
-  { k: 'betting', l: 'LIMIT', o: [['nl', 'NO-LIMIT'], ['pl', 'POT-LIMIT'], ['fl', 'FIXED']] },
+  { k: 'variant', l: 'GAME', o: [['floor', 'FLOOR DEAL'], ['holdem', "HOLD'EM"], ['omaha', 'OMAHA'], ['draw', '5-CARD DRAW'], ['short', 'SHORT DECK']] },
+  { k: 'betting', l: 'LIMIT', o: [['nl', 'NO-LIMIT'], ['pl', 'POT-LIMIT'], ['fl', 'FIXED']], show: poker },
   { k: 'stack', l: 'STACK', n: true },
-  { k: 'sb', l: 'SMALL BLIND', n: true },
-  { k: 'bb', l: 'BIG BLIND', n: true },
-  { k: 'ante', l: 'ANTE', n: true },
-  { k: 'straddle', l: 'STRADDLE', b: true },
-  { k: 'blindMode', l: 'BLINDS', o: [['static', 'STATIC'], ['hands', 'RISE BY HANDS'], ['minutes', 'RISE BY MINS']] },
-  { k: 'blindEvery', l: 'RISE EVERY', n: true, show: (r) => r.blindMode !== 'static' },
-  { k: 'rebuys', l: 'REBUYS', b: true },
-  { k: 'maxRebuys', l: 'MAX REBUYS', n: true, show: (r) => r.rebuys },
-  { k: 'runItTwice', l: 'RUN IT TWICE', b: true },
-  { k: 'bombEvery', l: 'BOMB POT EVERY', n: true },
-  { k: 'wild', l: 'WILD CARDS', o: [['none', 'NONE'], ['jokers', 'JOKERS'], ['deuces', 'DEUCES']] },
+  { k: 'goal', l: 'WIN AT (0 = LAST ONE LEFT)', n: true, show: (r) => !poker(r) },
+  { k: 'sb', l: 'SMALL BLIND', n: true, show: poker },
+  { k: 'bb', l: 'BIG BLIND', n: true, show: poker },
+  { k: 'ante', l: 'ANTE', n: true, show: poker },
+  { k: 'straddle', l: 'STRADDLE', b: true, show: poker },
+  { k: 'blindMode', l: 'BLINDS', o: [['static', 'STATIC'], ['hands', 'RISE BY HANDS'], ['minutes', 'RISE BY MINS']], show: poker },
+  { k: 'blindEvery', l: 'RISE EVERY', n: true, show: (r) => poker(r) && r.blindMode !== 'static' },
+  { k: 'rebuys', l: 'REBUYS', b: true, show: poker },
+  { k: 'maxRebuys', l: 'MAX REBUYS', n: true, show: (r) => poker(r) && r.rebuys },
+  { k: 'runItTwice', l: 'RUN IT TWICE', b: true, show: poker },
+  { k: 'bombEvery', l: 'BOMB POT EVERY', n: true, show: poker },
+  { k: 'wild', l: 'WILD CARDS', o: [['none', 'NONE'], ['jokers', 'JOKERS'], ['deuces', 'DEUCES']], show: poker },
   { k: 'timer', l: 'ACTION TIMER', o: [['0', 'OFF'], ['15', '15 SEC'], ['30', '30 SEC'], ['60', '60 SEC']] },
 ];
 
@@ -87,7 +91,7 @@ export class Lobby {
   private build() {
     this.el.innerHTML = `
       <div class="lobby">
-        <div class="hdr"><div class="code">ROOM <b id="lcode"></b></div>
+        <div class="hdr"><div class="code">ROOM <b id="lcode"></b></div><button class="btn sm" id="me">ME</button>
           <button class="btn sm gold" id="share">INVITE</button><button class="btn sm red" id="leave">LEAVE</button></div>
         <div class="seats" id="lseats"></div>
         <div class="presets" id="presets"></div>
@@ -101,6 +105,7 @@ export class Lobby {
     const $ = (id: string) => this.el.querySelector<HTMLElement>('#' + id)!;
     $('leave').onclick = () => this.net.send({ t: 'leave' });
     $('share').onclick = () => this.share();
+    $('me').onclick = () => { sfx('click'); openCustomize(() => this.net.send({ t: 'profile', name: profile.name || 'Player', avatar: profile.avatar, back: profile.back })); };
     $('ready').onclick = () => { sfx('click'); this.net.send({ t: 'ready', ready: !this.meSeat()?.ready }); };
     $('start').onclick = () => { sfx('click'); this.net.send({ t: 'start' }); };
     $('rules').addEventListener('change', (e) => {
@@ -170,6 +175,7 @@ export class Lobby {
       }
       this.el.querySelector<HTMLElement>(`[data-row="${f.k}"]`)!.hidden = !!f.show && !f.show(s.rules);
     }
+    this.el.querySelector('[data-row="stack"] span')!.textContent = poker(s.rules) ? 'STACK' : 'STARTING MONEY';
     this.el.querySelector('[data-row="blindEvery"] span')!.textContent = s.rules.blindMode === 'minutes' ? 'RISE EVERY (MIN)' : 'RISE EVERY (HANDS)';
     const seated = s.seats.filter(Boolean).length;
     const startBtn = this.el.querySelector<HTMLButtonElement>('#start')!;
@@ -178,6 +184,7 @@ export class Lobby {
     const ready = this.el.querySelector<HTMLButtonElement>('#ready')!;
     ready.hidden = s.seat < 0;
     ready.textContent = this.meSeat()?.ready ? 'NOT READY' : 'READY';
-    this.el.querySelector('#lmsg')!.textContent = s.seat < 0 ? 'TAP A SEAT TO SIT' : seated < 2 ? 'WAITING FOR PLAYERS...' : host ? 'START WHEN READY' : 'WAITING FOR HOST...';
+    const win = s.winner ? `${s.winner.toUpperCase()} WON THE LAST GAME! ` : '';
+    this.el.querySelector('#lmsg')!.textContent = win + (s.seat < 0 ? 'TAP A SEAT TO SIT' : seated < 2 ? 'WAITING FOR PLAYERS...' : host ? 'START WHEN READY' : 'WAITING FOR HOST...');
   }
 }

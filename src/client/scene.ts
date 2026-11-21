@@ -1,15 +1,15 @@
 // Table scene: display objects, layout, per-frame update and draw. Animations live in anim.ts.
 import type { RoomView } from '../shared/protocol.js';
-import { PAL } from './palette';
-import { drawText, textWidth } from './font';
-import { cardFace, CARD_BACK, MINI_BACK, avatar, drawChips, buildTable, LAMP, DEALER } from './sprites';
+
+
+import { buildTable } from './sprites';
 import { Tweens, Particles, Ticker, E } from './fx';
-import { settings } from './settings';
+
 import { sfx } from './audio';
 
 export const W = 195, H = 422;
 export interface P { x: number; y: number }
-export interface CardObj { c: number; x: number; y: number; rot: number; sx: number; s: number; a: number; lift: number; glow: number; face: boolean }
+export interface CardObj { c: number; x: number; y: number; rot: number; sx: number; s: number; a: number; lift: number; glow: number; face: boolean; b: number }
 export interface Flyer { fx: number; fy: number; tx: number; ty: number; k: number; amt: number; trail: boolean }
 export interface Bubble { text: string; c: number; s: number; life: number }
 export interface SeatFx { stack: Ticker; bet: Ticker; bounce: number; bubble: Bubble | null; blink: number; folded: boolean; flame: boolean }
@@ -19,7 +19,7 @@ export const CENTER: P = { x: 97, y: 168 }, POT: P = { x: 118, y: 132 }, DECK: P
 
 export const fmt = (n: number) =>
   n >= 1e6 ? +(n / 1e6).toFixed(n < 1e7 ? 1 : 0) + 'M' : n >= 1e4 ? +(n / 1e3).toFixed(n < 1e5 ? 1 : 0) + 'K' : String(n);
-export const newCard = (c: number, at: P, s = 0.6): CardObj => ({ c, x: at.x, y: at.y, rot: 0, sx: 1, s, a: 1, lift: 0, glow: 0, face: false });
+export const newCard = (c: number, at: P, s = 0.6, b = 0): CardObj => ({ c, x: at.x, y: at.y, rot: 0, sx: 1, s, a: 1, lift: 0, glow: 0, face: false, b });
 
 export class Scene {
   s: RoomView | null = null;
@@ -40,7 +40,10 @@ export class Scene {
   lamp = 1;
   selected = new Set<number>();
   onSelect = () => {};
-  private bg = buildTable(W, H);
+  bg = buildTable(W, H);
+  boss = -1;
+  crown = { y: 0, a: 0 };
+  house = { a: 0 };
 
   slot(seat: number) { return this.me >= 0 ? (seat - this.me + 8) % 8 : seat; }
   seatPos(seat: number): P { return SLOTS[this.slot(seat)]; }
@@ -99,6 +102,8 @@ export class Scene {
       f.folded = !!hp?.folded;
       f.flame = !!hp && hp.allIn && !hp.folded && !h!.done;
     });
+    const fb = s.floor && s.floor.phase !== 'stake' ? s.floor.boss : -1;
+    if (fb !== this.boss) { this.boss = fb; this.crown.a = fb >= 0 ? 1 : 0; this.crown.y = 0; }
     if (!h) { this.resetHand(); this.pot.set(0, true); return; }
     const sum = (k: 'total' | 'bet') => h.seats.reduce((a, p) => a + (p?.[k] ?? 0), 0);
     this.pot.set(h.done ? 0 : sum('total') - sum('bet'), fast);
@@ -112,6 +117,7 @@ export class Scene {
         const open = hp.shown && i !== s.seat;
         const t = this.holePos(i, j, n, open);
         const o = arr[j] ?? (arr[j] = newCard(c, t, t.s));
+        o.b = s.seats[i]?.back ?? 0;
         o.c = c;
         Object.assign(o, { x: t.x, y: t.y, s: t.s, rot: 0, sx: 1, a: 1, face: c >= 0 });
         if (i === s.seat) o.lift = this.selected.has(j) ? -6 : 0;
@@ -164,123 +170,12 @@ export class Scene {
     this.shake = Math.max(0, this.shake - dt * 14);
   }
 
-  private drawCard(ctx: CanvasRenderingContext2D, o: CardObj) {
-    if (o.a <= 0.01) return;
-    const face = o.face && o.c >= 0, mini = !face && o.s < 0.8;
-    const img = face ? cardFace(o.c, settings.fourColor, this.s?.rules.wild === 'deuces') : mini ? MINI_BACK : CARD_BACK;
-    const k = mini ? o.s / 0.6 : o.s;
-    ctx.save();
-    ctx.globalAlpha = o.a;
-    ctx.translate(o.x, o.y + o.lift);
-    ctx.rotate(o.rot);
-    ctx.scale(o.sx * k, k);
-    if (o.glow > 0) {
-      ctx.globalAlpha = o.a * (0.55 + 0.45 * Math.sin(this.t * 10));
-      ctx.fillStyle = PAL[10];
-      ctx.fillRect(-img.width / 2 - 1, -img.height / 2 - 1, img.width + 2, img.height + 2);
-      ctx.globalAlpha = o.a;
-    }
-    ctx.drawImage(img, -img.width / 2, -img.height / 2);
-    ctx.restore();
-  }
+}
 
-  private label(ctx: CanvasRenderingContext2D, str: string, x: number, y: number, c: number) {
-    const w = textWidth(str);
-    drawText(ctx, str, Math.max(w / 2 + 1, Math.min(W - w / 2 - 1, x)), y, c, 'c', 1, 0);
-  }
-
-  private drawSeat(ctx: CanvasRenderingContext2D, i: number) {
-    const s = this.s!, sv = s.seats[i];
-    if (!sv) return;
-    const p = this.seatPos(i), f = this.fx[i], h = s.hand, hp = h?.seats[i];
-    const live = !!h && !h.done;
-    const active = live && h!.toAct === i;
-    if (active) {
-      const r = 12 + Math.sin(this.t * 8) * 1.2;
-      ctx.fillStyle = PAL[Math.sin(this.t * 8) > 0 ? 10 : 9];
-      for (let a = 0; a < 28; a++) {
-        const an = (a / 28) * Math.PI * 2;
-        ctx.fillRect(Math.round(p.x + Math.cos(an) * r), Math.round(p.y + Math.sin(an) * r), 1, 1);
-      }
-    }
-    ctx.globalAlpha = (live && (!hp || f.folded)) || !sv.connected ? 0.45 : 1;
-    ctx.drawImage(avatar(sv.avatar, f.blink < 0), p.x - 8, p.y - 8);
-    ctx.globalAlpha = 1;
-    this.label(ctx, sv.name.slice(0, 8), p.x, p.y + 10, i === s.seat ? 10 : 7);
-    this.label(ctx, fmt(f.stack.n), p.x, p.y + 16, 11);
-    if (!sv.connected) drawText(ctx, 'ZZ', p.x + 5, p.y - 13 + Math.sin(this.t * 3) * 1.5, 12, 'l', 1, 0);
-    if (active && s.timerMs) {
-      const fr = Math.max(0, Math.min(1, (this.recvAt + s.timeLeft - performance.now()) / s.timerMs));
-      ctx.fillStyle = PAL[1];
-      ctx.fillRect(p.x - 11, p.y + 23, 22, 2);
-      ctx.fillStyle = PAL[fr > 0.5 ? 11 : fr > 0.25 ? 10 : 8];
-      ctx.fillRect(p.x - 11, p.y + 23, Math.round(22 * fr), 2);
-    }
-    if (h && h.dealer === i) {
-      const d = this.dir(i);
-      ctx.drawImage(DEALER, Math.round(p.x + d.x * 16 - d.y * 14 - 3), Math.round(p.y + d.y * 16 + d.x * 14 - 3));
-    }
-  }
-
-  private drawBubble(ctx: CanvasRenderingContext2D, p: P, b: Bubble) {
-    const w = textWidth(b.text) + 6, h = 9;
-    ctx.save();
-    ctx.globalAlpha = Math.min(1, b.life / 0.25);
-    ctx.translate(Math.round(Math.max(w / 2 + 2, Math.min(W - w / 2 - 2, p.x))), Math.round(p.y - 12));
-    ctx.scale(b.s, b.s);
-    const x = -Math.round(w / 2), y = -h;
-    ctx.fillStyle = PAL[0];
-    ctx.fillRect(x - 1, y, w + 2, h); ctx.fillRect(x, y - 1, w, h + 2); ctx.fillRect(-2, 0, 5, 2); ctx.fillRect(0, 2, 1, 1);
-    ctx.fillStyle = PAL[7];
-    ctx.fillRect(x, y, w, h); ctx.fillRect(-1, 0, 3, 1); ctx.fillRect(0, 1, 1, 1);
-    drawText(ctx, b.text, 0, y + 2, b.c, 'c');
-    ctx.restore();
-  }
-
-  draw(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    if (this.shake > 0 && !settings.reduced) ctx.translate(Math.round((Math.random() - 0.5) * this.shake), Math.round((Math.random() - 0.5) * this.shake));
-    ctx.drawImage(this.bg, 0, 0);
-    const g = ctx.createLinearGradient(0, 8, 0, 210);
-    g.addColorStop(0, `rgba(255,236,39,${0.16 * this.lamp})`);
-    g.addColorStop(1, 'rgba(255,236,39,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.moveTo(91, 8); ctx.lineTo(104, 8); ctx.lineTo(190, 210); ctx.lineTo(5, 210); ctx.fill();
-    ctx.drawImage(LAMP, 91, 0);
-    const s = this.s;
-    if (!s) { ctx.restore(); return; }
-    if (s.hand) { ctx.drawImage(MINI_BACK, DECK.x - 4, DECK.y - 5); ctx.drawImage(MINI_BACK, DECK.x - 5, DECK.y - 7); }
-    if (this.pot.n > 0) { drawChips(ctx, POT.x, POT.y + 4, this.pot.n); drawText(ctx, 'POT ' + fmt(this.pot.n), 97, 113, 10, 'c', 1, 0); }
-    this.fx.forEach((f, i) => {
-      if (f.bet.n <= 0 || !s.seats[i]) return;
-      const b = this.betPos(i);
-      drawChips(ctx, b.x, b.y + f.bounce, f.bet.n);
-      drawText(ctx, fmt(f.bet.n), b.x + 5, b.y - 3, 7, 'l', 1, 0);
-    });
-    for (let i = 0; i < 8; i++) this.drawSeat(ctx, i);
-    this.hole.forEach((arr, i) => { if (i !== this.me) arr.forEach((o) => this.drawCard(ctx, o)); });
-    this.boards.flat().forEach((o) => this.drawCard(ctx, o));
-    if (this.me >= 0) this.hole[this.me].forEach((o) => this.drawCard(ctx, o));
-    this.loose.forEach((o) => this.drawCard(ctx, o));
-    for (const fl of this.flyers) { const p = this.flyerPos(fl); drawChips(ctx, p.x, p.y, fl.amt, 4); }
-    this.px.draw(ctx);
-    if (this.dim.v > 0.01) {
-      const v = ctx.createRadialGradient(97, 190, 20, 97, 190, 240);
-      v.addColorStop(0, `rgba(0,0,0,${0.3 * this.dim.v})`);
-      v.addColorStop(1, `rgba(0,0,0,${0.85 * this.dim.v})`);
-      ctx.fillStyle = v;
-      ctx.fillRect(0, 0, W, H);
-      [...this.hole.flat(), ...this.boards.flat()].filter((o) => o.glow > 0).forEach((o) => this.drawCard(ctx, o));
-    }
-    this.fx.forEach((f, i) => { if (f.bubble && s.seats[i]) this.drawBubble(ctx, this.seatPos(i), f.bubble); });
-    if (this.banner) {
-      const b = this.banner;
-      ctx.globalAlpha = Math.min(1, b.life / 0.3);
-      ctx.fillStyle = PAL[0];
-      ctx.fillRect(0, CENTER.y - 52, W, 16 * b.s);
-      drawText(ctx, b.text, 97, CENTER.y - 49, b.c, 'c', 2 * b.s, 2);
-      ctx.globalAlpha = 1;
-    }
-    ctx.restore();
-  }
+/** Where a seat's chip towers stand (beside the avatar, above it for side seats). */
+export function towerPos(sc: Scene, seat: number, w: number): P {
+  const p = sc.seatPos(seat), d = sc.dir(seat);
+  if (sc.slot(seat) === 0) return { x: 174, y: 362 };
+  if (Math.abs(d.x) > 0.9) return { x: p.x - w / 2 + 1, y: p.y - 11 };
+  return p.x <= 97 ? { x: p.x + 10, y: p.y + 4 } : { x: p.x - 10 - w, y: p.y + 4 };
 }

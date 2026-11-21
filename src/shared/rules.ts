@@ -1,6 +1,6 @@
 import type { Wild } from './eval.js';
 
-export type Variant = 'holdem' | 'omaha' | 'draw' | 'short';
+export type Variant = 'floor' | 'holdem' | 'omaha' | 'draw' | 'short';
 export type Betting = 'nl' | 'pl' | 'fl';
 export type BlindMode = 'static' | 'hands' | 'minutes';
 
@@ -20,6 +20,7 @@ export interface Rules {
   bombEvery: number; // 0 = off
   wild: Wild;
   timer: number; // 0 = off, else seconds
+  goal: number; // Floor Deal: first to reach this wins (0 = no target)
 }
 
 export interface Level { sb: number; bb: number; ante: number }
@@ -32,6 +33,7 @@ const B = (deal: number, big = false): Street => ({ kind: 'bet', deal, big });
 const BOARD_STREETS = [B(0), B(3), B(1, true), B(1, true)];
 
 export const VARIANTS: Record<Variant, VariantDef> = {
+  floor: { name: 'Floor Deal', hole: 4, minRank: 11, omaha: false, board: false, streets: [] },
   holdem: { name: "Texas Hold'em", hole: 2, minRank: 2, omaha: false, board: true, streets: BOARD_STREETS },
   omaha: { name: 'Omaha', hole: 4, minRank: 2, omaha: true, board: true, streets: BOARD_STREETS },
   short: { name: 'Short Deck', hole: 2, minRank: 6, omaha: false, board: true, streets: BOARD_STREETS },
@@ -39,22 +41,24 @@ export const VARIANTS: Record<Variant, VariantDef> = {
 };
 
 export const DEFAULT_RULES: Rules = {
-  variant: 'holdem', betting: 'nl', stack: 1000, sb: 5, bb: 10, ante: 0, straddle: false,
-  blindMode: 'static', blindEvery: 10, rebuys: true, maxRebuys: 3, runItTwice: false,
-  bombEvery: 0, wild: 'none', timer: 30,
+  variant: 'floor', betting: 'nl', stack: 50000, sb: 5, bb: 10, ante: 0, straddle: false,
+  blindMode: 'static', blindEvery: 10, rebuys: false, maxRebuys: 3, runItTwice: false,
+  bombEvery: 0, wild: 'none', timer: 30, goal: 1000000,
 };
 
+const POKER: Rules = { ...DEFAULT_RULES, variant: 'holdem', stack: 1000, rebuys: true, goal: 0 };
 export const PRESETS: Record<string, Rules> = {
-  Casual: { ...DEFAULT_RULES },
-  Turbo: { ...DEFAULT_RULES, stack: 500, sb: 10, bb: 20, blindMode: 'hands', blindEvery: 5, rebuys: false, timer: 15 },
+  'Floor Deal': { ...DEFAULT_RULES },
+  Casual: { ...POKER },
+  Turbo: { ...POKER, stack: 500, sb: 10, bb: 20, blindMode: 'hands', blindEvery: 5, rebuys: false, timer: 15 },
   Chaos: {
-    ...DEFAULT_RULES, ante: 5, straddle: true, runItTwice: true, bombEvery: 4, wild: 'jokers',
+    ...POKER, ante: 5, straddle: true, runItTwice: true, bombEvery: 4, wild: 'jokers',
     blindMode: 'minutes', blindEvery: 5, timer: 15,
   },
 };
 
 export const OPTIONS = {
-  variant: ['holdem', 'omaha', 'draw', 'short'] as Variant[],
+  variant: ['floor', 'holdem', 'omaha', 'draw', 'short'] as Variant[],
   betting: ['nl', 'pl', 'fl'] as Betting[],
   blindMode: ['static', 'hands', 'minutes'] as BlindMode[],
   wild: ['none', 'jokers', 'deuces'] as Wild[],
@@ -75,7 +79,7 @@ export function sanitizeRules(raw: Partial<Record<keyof Rules, unknown>>): Rules
   return {
     variant: pick(raw.variant, OPTIONS.variant, d.variant),
     betting: pick(raw.betting, OPTIONS.betting, d.betting),
-    stack: int(raw.stack, bb * 10, 10_000_000, Math.max(d.stack, bb * 10)),
+    stack: int(raw.stack, 10, 100_000_000, d.stack),
     sb: int(raw.sb, 1, bb, Math.floor(bb / 2)),
     bb,
     ante: int(raw.ante, 0, bb, d.ante),
@@ -88,6 +92,7 @@ export function sanitizeRules(raw: Partial<Record<keyof Rules, unknown>>): Rules
     bombEvery: int(raw.bombEvery, 0, 50, d.bombEvery),
     wild: pick(raw.wild, OPTIONS.wild, d.wild),
     timer: pick(int(raw.timer, 0, 60, d.timer), OPTIONS.timer, d.timer),
+    goal: int(raw.goal, 0, 1_000_000_000, d.goal),
   };
 }
 
