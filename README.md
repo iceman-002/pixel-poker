@@ -38,6 +38,7 @@ Open the link in **Safari** → tap **Share** → **Add to Home Screen**. It the
 
 Each player gets 4 cards (A K Q J; one more rank per player beyond 4) and sees them before staking.
 Stakes go around once from a rotating starter: beat the highest stake, go all in, or skip (max 2 skips in a row).
+Hands, best to worst: **A-K-Q-J**, four of a kind, three of a kind, two pair, pair, high card.
 The biggest stake is the **boss** (tied stakes: best hand). The boss offers to split the house money (equal to the boss's stake):
 the boss keeps a share, the rest is split equally. Each player accepts or counters.
 Counters are handled biggest stake first: the boss either **agrees** (that player is locked in at their price, and the boss re-splits

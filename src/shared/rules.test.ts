@@ -92,6 +92,9 @@ test('floor: deck size, 4-card ranking', () => {
   assert.ok(floorScore(parseCards('Kh Kd Kc Js')).score > floorScore(parseCards('Ah Ad Kc Ks')).score, 'trips > two pair');
   assert.ok(floorScore(parseCards('Ah Ad Kc Qs')).score > floorScore(parseCards('Kh Kd Ac Qs')).score, 'pair rank');
   assert.equal(floorScore(parseCards('As Ah Ad Ac')).name, 'Four of a Kind');
+  assert.equal(floorScore(parseCards('As Kh Qd Jc')).name, 'A-K-Q-J');
+  assert.ok(floorScore(parseCards('As Kh Qd Jc')).score > floorScore(parseCards('As Ah Ad Ac')).score, 'A-K-Q-J beats four of a kind');
+  assert.equal(floorScore(parseCards('As Kh Qd Tc')).name, 'High Card', 'other all-different hands are high card');
 });
 
 test('floor: stakes, boss deal accepted, house pays the split', () => {

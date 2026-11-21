@@ -35,7 +35,7 @@ export interface Floor {
 }
 export interface FLegal { phase: FPhase; min: number; max: number; canSkip: boolean; canStake: boolean; vs: number; want: number }
 
-export const FLOOR_HANDS = ['High Card', 'Pair', 'Two Pair', 'Three of a Kind', 'Four of a Kind'];
+export const FLOOR_HANDS = ['High Card', 'Pair', 'Two Pair', 'Three of a Kind', 'Four of a Kind', 'A-K-Q-J'];
 const SHAPE: Record<string, number> = { '4': 4, '31': 3, '22': 2, '211': 1 };
 const down = (n: number) => Math.floor(n / CHIP) * CHIP;
 const onFloor = (p: FP | null): p is FP => !!p && (p.status === 'staked' || p.status === 'allin');
@@ -52,7 +52,8 @@ export function floorScore(cards: Card[]): { score: number; name: string } {
   const cnt = new Map<number, number>();
   for (const c of cards) cnt.set(rankOf(c), (cnt.get(rankOf(c)) ?? 0) + 1);
   const g = [...cnt].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
-  const cat = SHAPE[g.map((x) => x[1]).join('')] ?? 0;
+  const royal = g.length === 4 && [14, 13, 12, 11].every((r) => cnt.has(r));
+  const cat = royal ? 5 : SHAPE[g.map((x) => x[1]).join('')] ?? 0;
   const tb = g.flatMap(([r, n]) => Array(n).fill(r) as number[]);
   let score = cat;
   for (let i = 0; i < 4; i++) score = score * 16 + (tb[i] ?? 0);
