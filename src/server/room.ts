@@ -1,13 +1,16 @@
-import { randomUUID, randomInt } from 'node:crypto';
-import { WebSocket } from 'ws';
 import { startHand, applyAction, autoAction, legal, viewFor, type Hand, type Action, type Ev } from '../shared/engine.js';
 import { startFloor, applyFloor, autoFloor, floorLegal, floorView, type Floor, type FAction, type FEv } from '../shared/floor.js';
 import { DEFAULT_RULES, sanitizeRules, levelAt, type Rules } from '../shared/rules.js';
 import { MAX_SEATS, MAX_NAME, AVATAR_MAX, CARD_BACKS, type C2S, type RoomView, type S2C } from '../shared/protocol.js';
 
+/** Minimal socket shape shared by Node's `ws` and the Workers WebSocket. */
+export interface Sock { readyState: number; send(data: string): void; close(code?: number, reason?: string): void }
+const randomUUID = () => crypto.randomUUID();
+const randomInt = (n: number) => crypto.getRandomValues(new Uint32Array(1))[0] % n;
+
 export interface Member {
   id: string; token: string; name: string; avatar: number; back: number; seat: number;
-  stack: number; bought: boolean; rebuys: number; skips: number; ready: boolean; ws: WebSocket | null; leaving: boolean;
+  stack: number; bought: boolean; rebuys: number; skips: number; ready: boolean; ws: Sock | null; leaving: boolean;
 }
 export interface RoomOpts { handDelay: number; grace: number }
 type Game = { done: boolean; toAct: number; events: unknown[]; seats: ({ id: string; stack: number } | null)[] };
@@ -52,7 +55,7 @@ export class Room {
     return m;
   }
 
-  attach(m: Member, ws: WebSocket) { m.ws = ws; this.lastActive = Date.now(); this.broadcast(); }
+  attach(m: Member, ws: Sock) { m.ws = ws; this.lastActive = Date.now(); this.broadcast(); }
 
   detach(m: Member) {
     m.ws = null;
@@ -284,6 +287,6 @@ export class Room {
   dispose() { clearTimeout(this.actTimer); clearTimeout(this.nextTimer); }
 }
 
-export function send(ws: WebSocket | null, msg: S2C) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+export function send(ws: Sock | null, msg: S2C) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 }

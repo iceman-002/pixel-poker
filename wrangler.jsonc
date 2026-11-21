@@ -1,0 +1,8 @@
+{
+  "name": "pixel-poker",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./dist/client", "binding": "ASSETS" },
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "HubDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HubDO"] }]
+}
