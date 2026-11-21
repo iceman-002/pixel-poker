@@ -29,19 +29,35 @@ const stage = $('#stage'), cv = $<HTMLCanvasElement>('#cv'), ctx = cv.getContext
 const screenEl = $('#screen');
 
 // --- Integer scaling when it fits, best-fit otherwise; canvas backing at scale * min(DPR, 2).
-let K = 1;
+// The stage and canvas fill the whole screen; the 195x422 scene is centred and its backdrop is extended to every edge.
+let K = 1, SC = 1, OX = 0, OY = 0, LW = W, LH = H;
 function fit() {
-  const w = app.clientWidth, h = app.clientHeight;
+  const w = stage.clientWidth || app.clientWidth, h = stage.clientHeight || app.clientHeight;
   const f = Math.min(w / W, h / H);
-  const scale = f >= 1 && Math.floor(f) / f > 0.8 ? Math.floor(f) : f;
-  stage.style.width = `${W * scale}px`;
-  stage.style.height = `${H * scale}px`;
-  document.documentElement.style.setProperty('--s', String(scale));
-  K = scale * Math.min(2, devicePixelRatio || 1);
-  cv.width = Math.round(W * K);
-  cv.height = Math.round(H * K);
-  ctx.setTransform(K, 0, 0, K, 0, 0);
+  SC = f >= 1 && Math.floor(f) / f > 0.8 ? Math.floor(f) : f;
+  LW = w / SC; LH = h / SC;
+  OX = (LW - W) / 2; OY = (LH - H) / 2;
+  document.documentElement.style.setProperty('--s', String(SC));
+  K = SC * Math.min(2, devicePixelRatio || 1);
+  cv.width = Math.round(LW * K);
+  cv.height = Math.round(LH * K);
   ctx.imageSmoothingEnabled = false;
+}
+function paint() {
+  ctx.setTransform(K, 0, 0, K, 0, 0);
+  ctx.clearRect(0, 0, LW, LH);
+  // Extend the backdrop into the margins by repeating the edge rows/columns of the table image.
+  const bg = sc.bg;
+  if (OY > 0) {
+    ctx.drawImage(bg, 0, 0, W, 1, OX, 0, W, OY + 0.5);
+    ctx.drawImage(bg, 0, H - 1, W, 1, OX, OY + H - 0.5, W, OY + 0.5);
+  }
+  ctx.setTransform(K, 0, 0, K, OX * K, OY * K);
+  if (OX > 0) {
+    ctx.drawImage(bg, 0, 0, 1, H, -OX, 0, OX + 0.5, H);
+    ctx.drawImage(bg, W - 1, 0, 1, H, W - 0.5, 0, OX + 0.5, H);
+  }
+  drawScene(sc, ctx);
 }
 addEventListener('resize', fit);
 fit();
@@ -160,7 +176,7 @@ $('#tset').onclick = () => { sfx('click'); openSettings(); };
 $('#tleave').onclick = () => { if (confirm('Leave the table?')) net.send({ t: 'leave' }); };
 cv.addEventListener('pointerdown', (e) => {
   const r = cv.getBoundingClientRect();
-  sc.hit(((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H);
+  sc.hit((e.clientX - r.left) / SC - OX, (e.clientY - r.top) / SC - OY);
 });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
@@ -177,7 +193,7 @@ function frame(now: number) {
   lastT = now;
   if (!document.hidden) {
     sc.update(dt);
-    if (screen === 'table') { ctx.clearRect(0, 0, W, H); drawScene(sc, ctx); }
+    if (screen === 'table') paint();
   }
   requestAnimationFrame(frame);
 }
@@ -187,7 +203,7 @@ document.addEventListener('visibilitychange', () => { lastT = performance.now();
 // Debug hook (?debug): step frames manually when rAF is throttled.
 if (params.has('debug')) {
   Object.assign(window, {
-    pp: { sc, step: (sec: number) => { for (let t = 0; t < sec; t += 1 / 60) sc.update(1 / 60); ctx.clearRect(0, 0, W, H); drawScene(sc, ctx); } },
+    pp: { sc, step: (sec: number) => { for (let t = 0; t < sec; t += 1 / 60) sc.update(1 / 60); paint(); } },
   });
 }
 
