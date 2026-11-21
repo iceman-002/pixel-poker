@@ -31,9 +31,7 @@ const screenEl = $('#screen');
 // --- Integer scaling when it fits, best-fit otherwise; canvas backing at scale * min(DPR, 2).
 let K = 1;
 function fit() {
-  const cs = getComputedStyle(app);
-  const w = app.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const h = app.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const w = app.clientWidth, h = app.clientHeight;
   const f = Math.min(w / W, h / H);
   const scale = f >= 1 && Math.floor(f) / f > 0.8 ? Math.floor(f) : f;
   stage.style.width = `${W * scale}px`;
@@ -60,7 +58,7 @@ function toast(msg: string) {
 function wipe(swap: () => void) {
   const w = $('#wipe');
   w.className = 'in';
-  setTimeout(() => { swap(); w.className = 'out'; }, 300);
+  setTimeout(() => { swap(); requestAnimationFrame(() => { w.className = 'out'; }); }, 200);
 }
 
 // --- Screens
