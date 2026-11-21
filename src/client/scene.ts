@@ -167,7 +167,7 @@ export class Scene {
   private drawCard(ctx: CanvasRenderingContext2D, o: CardObj) {
     if (o.a <= 0.01) return;
     const face = o.face && o.c >= 0, mini = !face && o.s < 0.8;
-    const img = face ? cardFace(o.c, settings.fourColor) : mini ? MINI_BACK : CARD_BACK;
+    const img = face ? cardFace(o.c, settings.fourColor, this.s?.rules.wild === 'deuces') : mini ? MINI_BACK : CARD_BACK;
     const k = mini ? o.s / 0.6 : o.s;
     ctx.save();
     ctx.globalAlpha = o.a;

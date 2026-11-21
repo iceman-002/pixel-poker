@@ -42,6 +42,7 @@ export interface RoomView {
   legal: Legal | null;
   level: Level;
   levelIdx: number;
+  nextLevel: { in: number; unit: 'hands' | 'ms' } | null; // hands left at this level, or ms until blinds rise
   timeLeft: number; // ms remaining for the active player, 0 = no timer
   timerMs: number;
   canRebuy: boolean;

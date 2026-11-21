@@ -98,11 +98,24 @@ function openSettings() {
   m.onclick = (e) => { if (e.target === m || (e.target as HTMLElement).id === 'mclose') { sfx('click'); m.classList.remove('open'); } };
 }
 
-function hud(s: RoomView) {
+const VNAME: Record<string, string> = { holdem: "HOLD'EM", omaha: 'OMAHA', draw: '5-DRAW', short: 'SHORT DECK' };
+let hudS: RoomView | null = null, hudAt = 0;
+function hud(s: RoomView) { hudS = s; hudAt = performance.now(); renderHud(); }
+function renderHud() {
+  const s = hudS;
+  if (!s) return;
   $('#tcode').textContent = s.code;
-  const lv = s.level;
-  $('#tlevel').textContent = `#${s.handNo} BLINDS ${lv.sb}/${lv.bb}${lv.ante ? ` ANTE ${lv.ante}` : ''}${s.levelIdx ? ` LV${s.levelIdx + 1}` : ''}`;
+  const lv = s.hand?.level ?? s.level, nl = s.nextLevel;
+  let next = '';
+  if (nl?.unit === 'hands') next = nl.in <= 0 ? ' · UP NEXT' : ` · UP IN ${nl.in}`;
+  else if (nl) {
+    const ms = Math.max(0, nl.in - (performance.now() - hudAt));
+    next = ` · UP ${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+  }
+  const wild = s.rules.wild === 'none' ? '' : s.rules.wild === 'jokers' ? ' JOKERS' : ' 2S WILD';
+  $('#tlevel').innerHTML = `${s.rules.betting.toUpperCase()} ${VNAME[s.rules.variant]}${wild} #${s.handNo}<br>${lv.sb}/${lv.bb}${lv.ante ? ` A${lv.ante}` : ''}${next}`;
 }
+setInterval(() => { if (screen === 'table' && hudS?.nextLevel?.unit === 'ms') renderHud(); }, 1000);
 
 // --- Wiring
 const params = new URLSearchParams(location.search);

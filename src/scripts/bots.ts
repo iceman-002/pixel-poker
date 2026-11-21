@@ -5,10 +5,12 @@ import { startServer } from '../server/app.js';
 import { cardStr } from '../shared/cards.js';
 import type { Action, Ev } from '../shared/engine.js';
 import type { C2S, RoomView, S2C } from '../shared/protocol.js';
-import type { Variant } from '../shared/rules.js';
+import { PRESETS, type Rules, type Variant } from '../shared/rules.js';
 
 const HANDS = Number(process.argv[2] ?? 3);
 const variant = (process.argv[3] ?? 'holdem') as Variant;
+const preset = process.argv[4] ?? '';
+const extra: Partial<Rules> = PRESETS[preset] ?? (preset ? JSON.parse(preset) : {});
 const fail = (m: string) => { console.error('FAIL:', m); process.exit(1); };
 setTimeout(() => fail('timeout; phase=' + bots[0].s?.phase + ' errors=' + errors.join('; ') + ' seats=' + JSON.stringify(bots[0].s?.seats.map((x) => x && [x.name, x.stack, x.rebuys]))), 8000).unref();
 
@@ -75,6 +77,7 @@ class Bot {
 }
 
 function observe(s: RoomView, ev: Ev[]) {
+  if (s.phase === 'lobby' && doneHands > 0) { console.log(`Game over after ${doneHands} hands (no rebuys): ${s.seats.find((x) => x && x.stack > 0)?.name} wins`); return finish(); }
   const nm = (seat: number) => s.seats[seat]?.name ?? `#${seat}`;
   for (const e of ev) {
     if (e.t === 'post') console.log(`  ${nm(e.seat)} posts ${e.kind} ${e.amount}`);
@@ -85,7 +88,7 @@ function observe(s: RoomView, ev: Ev[]) {
       console.log(`  ** ${nm(a.seat)} wins ${a.amount} (pot ${a.pot}, run ${a.run})${a.hand ? ` with ${a.hand} [${cs(a.cards ?? [])}]` : ''}`);
   }
   const h = s.hand;
-  if (h && !h.done && ev.some((e) => e.t === 'deal')) console.log(`Hand #${s.handNo} (${variant}) dealer=${nm(h.dealer)} blinds ${s.level.sb}/${s.level.bb}`);
+  if (h && !h.done && ev.some((e) => e.t === 'deal')) console.log(`Hand #${s.handNo} (${variant} ${s.rules.betting}${h.bomb ? ' BOMB' : ''}) dealer=${nm(h.dealer)} blinds ${s.level.sb}/${s.level.bb}`);
   if (h?.done && loggedHand !== s.handNo) {
     loggedHand = s.handNo;
     const seats = s.seats.filter((x) => x !== null);
@@ -119,7 +122,7 @@ function finish() {
 }
 
 const bots = ['Ace', 'Bluff', 'Chip', 'Dice'].map((n, i) => new Bot(n, i));
-await bots[0].connect({ t: 'create', name: bots[0].name, avatar: 0, rules: { variant, timer: 0 } });
+await bots[0].connect({ t: 'create', name: bots[0].name, avatar: 0, rules: { ...extra, variant, timer: 0 } });
 for (const b of bots.slice(1)) await b.connect({ t: 'join', room: code, name: b.name, avatar: b.avatar });
 bots.forEach((b, i) => b.send({ t: 'sit', seat: i * 2 }));
 await until(() => bots[0].s?.seats.filter(Boolean).length === 4);

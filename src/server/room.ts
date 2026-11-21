@@ -65,6 +65,13 @@ export class Room {
     return 0;
   }
 
+  private nextLevel(): RoomView['nextLevel'] {
+    const r = this.rules, L = this.levelIdx();
+    if (this.phase !== 'playing' || r.blindMode === 'static') return null;
+    if (r.blindMode === 'hands') return { in: (L + 1) * r.blindEvery - this.handNo, unit: 'hands' };
+    return { in: Math.max(0, this.startedAt + (L + 1) * r.blindEvery * 60000 - Date.now()), unit: 'ms' };
+  }
+
   /** Handle an intent. Returns an error string if rejected. */
   handle(m: Member, msg: C2S): string | void {
     const playing = this.phase === 'playing';
@@ -230,6 +237,7 @@ export class Room {
       legal: h && m.seat >= 0 && h.seats[m.seat]?.id === m.id ? legal(h, m.seat) : null,
       level: levelAt(this.rules, this.levelIdx()),
       levelIdx: this.levelIdx(),
+      nextLevel: this.nextLevel(),
       timeLeft: this.deadline ? Math.max(0, this.deadline - Date.now()) : 0,
       timerMs: this.timerMs,
       canRebuy: this.rules.rebuys && m.seat >= 0 && m.stack === 0 && m.rebuys < this.rules.maxRebuys && !this.inLiveHand(m),

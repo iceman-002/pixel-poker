@@ -170,6 +170,7 @@ export class Lobby {
       }
       this.el.querySelector<HTMLElement>(`[data-row="${f.k}"]`)!.hidden = !!f.show && !f.show(s.rules);
     }
+    this.el.querySelector('[data-row="blindEvery"] span')!.textContent = s.rules.blindMode === 'minutes' ? 'RISE EVERY (MIN)' : 'RISE EVERY (HANDS)';
     const seated = s.seats.filter(Boolean).length;
     const startBtn = this.el.querySelector<HTMLButtonElement>('#start')!;
     startBtn.hidden = !host;

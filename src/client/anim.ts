@@ -15,6 +15,7 @@ export class Animator {
   private q: Item[] = [];
   private busy = false;
   private pending: Promise<void>[] = [];
+  private lastLevel = '';
   constructor(private sc: Scene, private onSynced: (s: RoomView) => void) {}
 
   push(s: RoomView, ev: Ev[]) {
@@ -43,18 +44,28 @@ export class Animator {
     this.sc.me = s.seat;
     // Hide the stale turn ring while streets / showdown animate.
     if (this.sc.s?.hand && ev.some((e) => e.t === 'street' || e.t === 'showdown' || e.t === 'deal')) this.sc.s.hand.toAct = -1;
+    if (ev.some((e) => e.t === 'deal')) { this.sc.resetHand(); this.sc.dim.v = 0; this.sc.pot.set(0, true); }
+    let bomb = false;
     for (const e of ev) {
       switch (e.t) {
         case 'post': {
+          if (e.kind === 'bomb' && !bomb) { bomb = true; this.banner('BOMB POT!', 9); this.sc.shake = 4; await this.wait(0.5); }
           const p = this.chips(e.seat, e.amount, e.kind === 'ante' || e.kind === 'bomb');
           this.pending.push(p);
           if (e.kind === 'straddle') this.sc.bubble(e.seat, 'STRADDLE', 2);
           await this.wait(0.06);
           break;
         }
-        case 'deal': await this.settle(); await this.deal(s); break;
-        case 'act': await this.settle(); await this.act(e); break;
-        case 'street': await this.settle(); await this.street(e); break;
+        case 'deal': {
+          await this.settle();
+          const lv = s.hand ? `${s.hand.level.sb}/${s.hand.level.bb}` : '';
+          if (this.lastLevel && lv && lv !== this.lastLevel) { this.banner(`BLINDS ${lv}`, 12); await this.wait(0.9); }
+          this.lastLevel = lv;
+          await this.deal(s);
+          break;
+        }
+        case 'act': await this.settle(); await this.act(s, e); break;
+        case 'street': await this.settle(); await this.street(s, e); break;
         case 'twice': this.banner('RUN IT TWICE!', 14); await this.wait(0.8); break;
         case 'showdown': await this.settle(); await this.showdown(s, e); break;
       }
@@ -108,13 +119,45 @@ export class Animator {
     if (s.seat >= 0) await Promise.all(sc.hole[s.seat].map((o, j) => sc.flip(o, j * 0.08)));
   }
 
-  private async act(e: ActEv) {
+  /** 5-card draw: discards fly to the muck, kept cards close ranks, replacements deal in (and flip for you). */
+  private async drawCards(s: RoomView, e: ActEv) {
+    const sc = this.sc, n = e.amount, seat = e.seat, mine = seat === s.seat;
+    const objs = sc.hole[seat], total = objs.length;
+    if (!n || !total) return;
+    const idx = mine && sc.selected.size === n ? [...sc.selected] : Array.from({ length: n }, (_, k) => total - n + k);
+    const kept = objs.filter((_, j) => !idx.includes(j));
+    for (const o of objs.filter((_, j) => idx.includes(j))) {
+      sc.loose.push(o);
+      void sc.tw.to(o, { x: DECK.x, y: DECK.y, rot: 3, a: 0, s: 0.6, lift: 0 }, 0.35, E.inQuad)
+        .then(() => { sc.loose = sc.loose.filter((x) => x !== o); });
+    }
+    sc.selected.clear();
+    sc.hole[seat] = kept;
+    await this.wait(0.25);
+    const final = s.hand?.seats[seat]?.hole ?? [];
+    const ps: Promise<void>[] = kept.map((o, j) => {
+      const t = sc.holePos(seat, j, total, false);
+      return sc.tw.to(o, { x: t.x, y: t.y, lift: 0 }, 0.25);
+    });
+    for (let k = 0; k < n; k++) {
+      const j = kept.length + k, t = sc.holePos(seat, j, total, false);
+      const o = newCard(mine ? final[j] ?? -1 : -1, DECK);
+      o.rot = -Math.PI;
+      sc.hole[seat][j] = o;
+      sfx('deal', k * 0.08);
+      ps.push(sc.tw.to(o, { x: t.x, y: t.y, rot: 0, s: t.s }, 0.3, E.outQuad, k * 0.08).then(() => (mine ? sc.flip(o) : undefined)));
+    }
+    await Promise.all(ps);
+  }
+
+  private async act(s: RoomView, e: ActEv) {
     const sc = this.sc, f = sc.fx[e.seat];
     const label = e.type === 'fold' ? 'FOLD' : e.type === 'check' ? 'CHECK' : e.type === 'call' ? `CALL ${fmt(e.amount)}`
       : e.type === 'raise' ? `RAISE ${fmt(e.to)}` : e.amount ? `DRAW ${e.amount}` : 'STAND PAT';
     sc.bubble(e.seat, e.allIn ? 'ALL IN!' : label, e.allIn || e.type === 'raise' ? 8 : e.type === 'fold' ? 5 : 1);
     sfx(e.allIn ? 'allin' : e.type === 'fold' ? 'fold' : e.type === 'check' ? 'check' : 'click');
-    if (e.amount > 0 && e.type !== 'draw') await this.chips(e.seat, e.amount, false);
+    if (e.type === 'draw') { await this.drawCards(s, e); await this.wait(0.15); }
+    else if (e.amount > 0) await this.chips(e.seat, e.amount, false);
     else await this.wait(0.25);
     if (e.type === 'fold') { f.folded = true; this.flick(e.seat); }
     if (e.allIn) { f.flame = true; sc.shake = Math.max(sc.shake, 2); }
@@ -147,9 +190,14 @@ export class Animator {
     if (ps.length) { sfx('chip'); await Promise.all(ps); }
   }
 
-  private async street(e: StreetEv) {
+  private async street(s: RoomView, e: StreetEv) {
     const sc = this.sc;
     await this.gather();
+    if (s.hand && VARIANTS[s.hand.rules.variant].streets[e.street]?.kind === 'draw') {
+      this.banner(s.seat >= 0 && s.hand.seats[s.seat] && !s.hand.seats[s.seat]!.folded ? 'DRAW! TAP TO DISCARD' : 'DRAW!', 12);
+      await this.wait(0.6);
+      return;
+    }
     const runs = e.boards.length;
     while (sc.boards.length < runs) {
       sc.boards.push(sc.boards[0].map((o) => ({ ...o })));

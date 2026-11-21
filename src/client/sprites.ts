@@ -44,8 +44,10 @@ function cardBody(w: number, h: number) {
 }
 
 const faces = new Map<string, HTMLCanvasElement>();
-export function cardFace(card: number, four: boolean): HTMLCanvasElement {
-  const key = card + (four ? 'f' : 'n');
+const WILD_STAR = ['..#..', '.###.', '#####', '.###.', '.#.#.'];
+export function cardFace(card: number, four: boolean, deucesWild = false): HTMLCanvasElement {
+  const wild = deucesWild && !isJoker(card) && rankOf(card) === 2;
+  const key = card + (four ? 'f' : 'n') + (wild ? 'w' : '');
   const hit = faces.get(key);
   if (hit) return hit;
   const { c, x } = cardBody(15, 21);
@@ -57,6 +59,7 @@ export function cardFace(card: number, four: boolean): HTMLCanvasElement {
     x.drawImage(textSprite(RANKS[rankOf(card)], col), 2, 2);
     x.drawImage(fromRows(SUIT5[s], { '#': col }), 2, 8);
     x.drawImage(fromRows(SUIT7[s], { '#': col }), 7, 13);
+    if (wild) x.drawImage(fromRows(WILD_STAR, { '#': 13 }), 9, 2);
   }
   faces.set(key, c);
   return c;
