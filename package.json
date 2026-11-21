@@ -9,6 +9,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
     "test": "tsc -p tsconfig.server.json && node --test dist-server/shared/rules.test.js",
+    "botjoin": "node dist-server/scripts/botjoin.js",
     "bots": "tsc -p tsconfig.server.json && node dist-server/scripts/bots.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json"
   },

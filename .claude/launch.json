@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pixel-poker",
+      "runtimeExecutable": "C:/Users/dippy/AppData/Local/chaos-pool-tools/node-v26.13.1-win-x64/node.exe",
+      "runtimeArgs": ["dist-server/server/index.js"],
+      "port": 8080
+    }
+  ]
+}
