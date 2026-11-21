@@ -65,6 +65,7 @@ const int = (v: unknown, lo: number, hi: number, d: number) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
 };
+const bool = (v: unknown, d: boolean) => (v === undefined ? d : !!v);
 const pick = <T>(v: unknown, opts: readonly T[], d: T): T => (opts.includes(v as T) ? (v as T) : d);
 
 /** Sanitize untrusted host input into a valid Rules object. */
@@ -77,14 +78,14 @@ export function sanitizeRules(raw: Partial<Record<keyof Rules, unknown>>): Rules
     stack: int(raw.stack, bb * 10, 10_000_000, Math.max(d.stack, bb * 10)),
     sb: int(raw.sb, 1, bb, Math.floor(bb / 2)),
     bb,
-    ante: int(raw.ante, 0, bb, 0),
-    straddle: !!raw.straddle,
+    ante: int(raw.ante, 0, bb, d.ante),
+    straddle: bool(raw.straddle, d.straddle),
     blindMode: pick(raw.blindMode, OPTIONS.blindMode, d.blindMode),
     blindEvery: int(raw.blindEvery, 1, 120, d.blindEvery),
-    rebuys: !!raw.rebuys,
+    rebuys: bool(raw.rebuys, d.rebuys),
     maxRebuys: int(raw.maxRebuys, 0, 99, d.maxRebuys),
-    runItTwice: !!raw.runItTwice,
-    bombEvery: int(raw.bombEvery, 0, 50, 0),
+    runItTwice: bool(raw.runItTwice, d.runItTwice),
+    bombEvery: int(raw.bombEvery, 0, 50, d.bombEvery),
     wild: pick(raw.wild, OPTIONS.wild, d.wild),
     timer: pick(int(raw.timer, 0, 60, d.timer), OPTIONS.timer, d.timer),
   };
