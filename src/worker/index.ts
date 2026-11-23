@@ -30,7 +30,8 @@ export class HubDO {
 export default {
   async fetch(req: Request, env: any): Promise<Response> {
     const { pathname } = new URL(req.url);
-    if (pathname === '/ws') return env.HUB.get(env.HUB.idFromName('hub')).fetch(req);
+    // One game server per deployed version, so a deploy always runs the new code (it resets open rooms, as a restart would).
+    if (pathname === '/ws') return env.HUB.get(env.HUB.idFromName('hub-' + (env.VERSION?.id ?? 'dev'))).fetch(req);
     if (pathname === '/healthz') return new Response('ok');
     return env.ASSETS.fetch(req);
   },
