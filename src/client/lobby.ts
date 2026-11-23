@@ -1,5 +1,5 @@
 // Home screen (name/avatar/create/join) and lobby (seats, synced rules, presets).
-import type { RoomView } from '../shared/protocol.js';
+import type { RoomView, RoomSummary } from '../shared/protocol.js';
 import { PRESETS, type Rules } from '../shared/rules.js';
 import type { Net } from './net';
 import { avatar } from './sprites';
@@ -29,6 +29,7 @@ export function renderHome(el: HTMLElement, net: Net, room: string, settings: ()
       <div class="row join"><input id="code" maxlength="4" placeholder="CODE" autocapitalize="characters" autocomplete="off">
         <button class="btn" id="join">JOIN</button></div>
       <button class="btn sm ghost" id="settings">SETTINGS</button>
+      <div class="tables" id="tables"></div>
       <div class="hint" id="a2hs"></div>
     </div>`;
   const t = el.querySelector<HTMLCanvasElement>('.title')!.getContext('2d')!;
@@ -60,6 +61,20 @@ export function renderHome(el: HTMLElement, net: Net, room: string, settings: ()
   if (ios && !standalone) el.querySelector('#a2hs')!.innerHTML = 'INSTALL: TAP <b>SHARE</b> THEN <b>ADD TO HOME SCREEN</b>';
 }
 
+const VNAMES: Record<string, string> = { floor: 'FLOOR DEAL', holdem: "HOLD'EM", omaha: 'OMAHA', draw: '5-DRAW', short: 'SHORT DECK' };
+/** OPEN TABLES list on the home screen. */
+export function showRooms(el: HTMLElement, rooms: RoomSummary[], join: (code: string) => void) {
+  const box = el.querySelector<HTMLElement>('#tables');
+  if (!box) return;
+  box.innerHTML = rooms.length
+    ? '<h3>OPEN TABLES</h3>' + rooms.map((r) => `<button class="table-row" data-code="${r.code}"><b>${r.code}</b><span>${VNAMES[r.variant] ?? ''}<br><small>${esc(r.host)} · ${r.players}/8${r.playing ? ' · PLAYING' : ''}</small></span><i>JOIN</i></button>`).join('')
+    : '<h3>OPEN TABLES</h3><p class="hint">NO OPEN TABLES RIGHT NOW</p>';
+  box.onclick = (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-code]');
+    if (b) { sfx('click'); join(b.dataset.code!); }
+  };
+}
+
 type Field = { k: keyof Rules; l: string; o?: [string, string][]; n?: boolean; b?: boolean; show?: (r: Rules) => boolean };
 const poker = (r: Rules) => r.variant !== 'floor';
 const FIELDS: Field[] = [
@@ -78,6 +93,7 @@ const FIELDS: Field[] = [
   { k: 'runItTwice', l: 'RUN IT TWICE', b: true, show: poker },
   { k: 'bombEvery', l: 'BOMB POT EVERY', n: true, show: poker },
   { k: 'wild', l: 'WILD CARDS', o: [['none', 'NONE'], ['jokers', 'JOKERS'], ['deuces', 'DEUCES']], show: poker },
+  { k: 'listed', l: 'PUBLIC ROOM', b: true },
   { k: 'timer', l: 'ACTION TIMER', o: [['0', 'OFF'], ['15', '15 SEC'], ['30', '30 SEC'], ['60', '60 SEC']] },
 ];
 
@@ -94,6 +110,7 @@ export class Lobby {
         <div class="hdr"><div class="code">ROOM <b id="lcode"></b></div><button class="btn sm" id="me">ME</button>
           <button class="btn sm gold" id="share">INVITE</button><button class="btn sm red" id="leave">LEAVE</button></div>
         <div class="seats" id="lseats"></div>
+        <button class="btn sm" id="addbot">+ ADD BOT</button>
         <div class="presets" id="presets"></div>
         <div class="rules" id="rules">${FIELDS.map((f) => `<label class="rule" data-row="${f.k}"><span>${f.l}</span>${
           f.o ? `<select data-k="${f.k}">${f.o.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>`
@@ -108,6 +125,7 @@ export class Lobby {
     $('me').onclick = () => { sfx('click'); openCustomize(() => this.net.send({ t: 'profile', name: profile.name || 'Player', avatar: profile.avatar, back: profile.back })); };
     $('ready').onclick = () => { sfx('click'); this.net.send({ t: 'ready', ready: !this.meSeat()?.ready }); };
     $('start').onclick = () => { sfx('click'); this.net.send({ t: 'start' }); };
+    $('addbot').onclick = () => { sfx('click'); this.net.send({ t: 'addbot' }); };
     $('rules').addEventListener('change', (e) => {
       const t = e.target as HTMLInputElement, k = t.dataset.k as keyof Rules;
       if (!k) return;
@@ -160,9 +178,14 @@ export class Lobby {
       b.className = 'seat' + (sv ? ' taken' : '') + (i === s.seat ? ' me' : '') + (sv?.ready ? ' ready' : '');
       if (sv) {
         b.appendChild(avatarCanvas(sv.avatar));
-        b.insertAdjacentHTML('beforeend', `<span>${esc(sv.name)}</span><small>${sv.id === s.host ? 'HOST' : sv.ready ? 'READY' : sv.connected ? '' : 'AWAY'}</small>`);
+        b.insertAdjacentHTML('beforeend', `<span>${esc(sv.name)}</span><small>${sv.bot ? (host ? 'BOT · TAP X' : 'BOT') : sv.id === s.host ? 'HOST' : sv.ready ? 'READY' : sv.connected ? '' : 'AWAY'}</small>`);
       } else b.innerHTML = '<span class="empty">SIT</span>';
-      b.onclick = () => { sfx('tap'); if (!sv) this.net.send({ t: 'sit', seat: i }); else if (i === s.seat) this.net.send({ t: 'stand' }); };
+      b.onclick = () => {
+        sfx('tap');
+        if (!sv) this.net.send({ t: 'sit', seat: i });
+        else if (i === s.seat) this.net.send({ t: 'stand' });
+        else if (sv.bot && host) this.net.send({ t: 'kick', id: sv.id });
+      };
       seats.appendChild(b);
     });
     if (first || host !== this.el.querySelector('#presets')!.hasChildNodes()) this.renderPresets(host);
@@ -178,6 +201,7 @@ export class Lobby {
     this.el.querySelector('[data-row="stack"] span')!.textContent = poker(s.rules) ? 'STACK' : 'STARTING MONEY';
     this.el.querySelector('[data-row="blindEvery"] span')!.textContent = s.rules.blindMode === 'minutes' ? 'RISE EVERY (MIN)' : 'RISE EVERY (HANDS)';
     const seated = s.seats.filter(Boolean).length;
+    this.el.querySelector<HTMLElement>('#addbot')!.hidden = !host || seated >= 8;
     const startBtn = this.el.querySelector<HTMLButtonElement>('#start')!;
     startBtn.hidden = !host;
     startBtn.disabled = seated < 2;

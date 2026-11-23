@@ -24,7 +24,8 @@ export class Controls {
       <div class="bar" id="bar"></div>
       <div class="sheet" id="sheet">
         <div class="amt"><span id="stitle"></span><b id="amt">0</b><i id="snote"></i></div>
-        <input type="range" id="slider" min="0" max="1" step="1">
+        <div class="stepper"><button class="btn" data-step="-1">-</button>
+          <input id="amtin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" enterkeyhint="done"><button class="btn" data-step="1">+</button></div>
         <div class="quick" id="quick"></div>
         <div class="row"><button class="btn" data-a="back">BACK</button><button class="btn gold" data-a="confirm">CONFIRM</button></div>
       </div>`);
@@ -33,12 +34,41 @@ export class Controls {
       if (!b || !root.contains(b)) return;
       const a = b.dataset.a, q = b.dataset.q;
       if (a === 'back') { sfx('click'); this.sheet(null); }
-      else if (a === 'confirm' && this.cfg) { sfx('click'); this.cfg.confirm(this.v); }
+      else if (a === 'confirm' && this.cfg) {
+        sfx('click');
+        const inp = this.$<HTMLInputElement>('#amtin');
+        if (inp.value && Number(inp.value) !== this.v) this.set(Number(inp.value), true);
+        this.cfg.confirm(this.v);
+      }
       else if (a === 'sit' && this.s) { const i = this.s.seats.findIndex((x) => !x); if (i >= 0) this.net.send({ t: 'sit', seat: i }); }
       else if (a === 'rebuy') this.net.send({ t: 'rebuy' });
       else if (q !== undefined && this.cfg) { sfx('tap'); this.set(this.cfg.quick[Number(q)][1]); }
     });
-    this.$<HTMLInputElement>('#slider').addEventListener('input', (e) => this.set(Number((e.target as HTMLInputElement).value), true));
+    const inp = this.$<HTMLInputElement>('#amtin');
+    inp.addEventListener('input', () => { inp.value = inp.value.replace(/\D/g, '').slice(0, 10); });
+    inp.addEventListener('change', () => this.set(Number(inp.value || 0), true));
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    // -/+ buttons: tap for one step, hold to repeat and speed up.
+    let hold = 0, reps = 0;
+    const stop = () => { clearTimeout(hold); hold = 0; };
+    const bump = (d: number) => {
+      const c = this.cfg;
+      if (!c) return;
+      const base = Math.max(c.step, Math.round(10 ** (Math.floor(Math.log10(Math.max(this.v, 1))) - 1) / c.step) * c.step);
+      this.set(this.v + d * base * (reps > 12 ? 10 : 1), true);
+      sfx('tap');
+    };
+    root.querySelectorAll<HTMLButtonElement>('[data-step]').forEach((b) => {
+      const d = Number(b.dataset.step);
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        reps = 0;
+        bump(d);
+        const loop = (ms: number) => { hold = window.setTimeout(() => { reps++; bump(d); loop(Math.max(45, ms * 0.85)); }, ms); };
+        loop(380);
+      });
+      for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
+    });
     sc.onSelect = () => this.update(this.s);
   }
 
@@ -55,7 +85,7 @@ export class Controls {
     if (!c) return;
     if (snap && v < c.max) v = Math.round(v / c.step) * c.step;
     this.v = Math.max(c.min, Math.min(c.max, Math.round(v)));
-    this.$<HTMLInputElement>('#slider').value = String(this.v);
+    this.$<HTMLInputElement>('#amtin').value = String(this.v);
     this.$('#amt').textContent = c.label ? c.label(this.v) : fmt(this.v);
     this.$('#snote').textContent = c.note?.(this.v) ?? '';
   }
@@ -63,10 +93,6 @@ export class Controls {
   private sheet(c: SheetCfg | null) {
     this.cfg = c;
     if (c) {
-      const sl = this.$<HTMLInputElement>('#slider');
-      sl.min = String(c.min);
-      sl.max = String(c.max);
-      sl.step = String(c.step);
       this.$('#stitle').textContent = c.title;
       this.$('#quick').innerHTML = c.quick.map(([l], i) => `<button class="btn sm${i === c.quick.length - 1 ? ' red' : ''}" data-q="${i}">${l}</button>`).join('');
       this.set(c.start);
@@ -162,9 +188,26 @@ export class Controls {
     }
   }
 
+  /** Tap on another player: give them chips from your own stack. */
+  openGive(seat: number) {
+    const s = this.s;
+    if (!s || s.phase !== 'playing' || s.seat < 0 || seat === s.seat || !s.seats[seat]) return;
+    const hp = s.floor ? s.floor.seats[s.seat] : s.hand?.seats[s.seat];
+    const mine = hp && !s.hand?.done ? hp.stack : s.seats[s.seat]!.stack;
+    if (mine <= 0) return this.toast('No chips to give');
+    const who = s.seats[seat]!.name.toUpperCase(), q = (f: number) => Math.max(1, Math.floor((mine * f) / 10) * 10 || 1);
+    this.sheet({
+      title: 'GIVE ' + who, min: 1, max: mine, step: s.floor ? 10 : 1, start: Math.min(mine, q(0.1)),
+      quick: [['10%', q(0.1)], ['25%', q(0.25)], ['HALF', q(0.5)], ['ALL', mine]],
+      note: (v) => `YOU KEEP ${fmt(mine - v)}`,
+      confirm: (v) => { this.net.send({ t: 'give', seat, amount: v }); this.sheet(null); },
+    });
+  }
+
   private infoText(s: RoomView, mine: boolean): string {
     const h = s.hand, f = s.floor, L = s.flegal;
-    if (s.seat < 0) return `SPECTATING ${s.seats.some((x) => !x) ? '<button class="btn sm gold" data-a="sit">SIT IN</button>' : ''}`;
+    if (s.spectating && s.seat >= 0) return 'YOU ARE OUT · TAP A PLAYER TO WATCH';
+    if (s.seat < 0) return `WATCHING · TAP A PLAYER ${s.seats.some((x) => !x) ? '<button class="btn sm gold" data-a="sit">SIT IN</button>' : ''}`;
     if (s.canRebuy) return `BUSTED <button class="btn sm gold" data-a="rebuy">REBUY ${fmt(s.rules.stack)}</button>`;
     const who = (i: number) => s.seats[i]?.name ?? '';
     if (f && !f.done) {

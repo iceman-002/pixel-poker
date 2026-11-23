@@ -2,7 +2,8 @@
 import type { RoomView } from '../shared/protocol.js';
 
 
-import { buildTable } from './sprites';
+import { buildTable } from './table';
+import { settings } from './settings';
 import { Tweens, Particles, Ticker, E } from './fx';
 
 import { sfx } from './audio';
@@ -40,10 +41,24 @@ export class Scene {
   lamp = 1;
   selected = new Set<number>();
   onSelect = () => {};
-  bg = buildTable(W, H);
+  bg = buildTable(W, H, settings.carpet, settings.felt);
+  rebuildTable() { this.bg = buildTable(W, H, settings.carpet, settings.felt); }
   boss = -1;
   crown = { y: 0, a: 0 };
   house = { a: 0 };
+  watch = -1; // spectators: the seat shown at the bottom with its cards large
+
+  /** The seat drawn at the bottom of the table: yourself, or the player you are watching while out. */
+  bottom(s: RoomView): number {
+    if (s.spectating && this.watch >= 0 && s.seats[this.watch]) return this.watch;
+    if (s.spectating && s.seat < 0) return (this.watch = s.seats.findIndex(Boolean));
+    return s.seat;
+  }
+  /** Seat whose avatar is under (x, y), or -1. */
+  seatAt(x: number, y: number): number {
+    for (let i = 0; i < 8; i++) if (this.s?.seats[i]) { const p = this.seatPos(i); if (Math.abs(x - p.x) < 13 && Math.abs(y - p.y) < 15) return i; }
+    return -1;
+  }
 
   slot(seat: number) { return this.me >= 0 ? (seat - this.me + 8) % 8 : seat; }
   seatPos(seat: number): P { return SLOTS[this.slot(seat)]; }
@@ -93,7 +108,7 @@ export class Scene {
   sync(s: RoomView, at: number, fast: boolean) {
     this.s = s;
     this.recvAt = at;
-    this.me = s.seat;
+    this.me = this.bottom(s);
     const h = s.hand;
     s.seats.forEach((sv, i) => {
       const f = this.fx[i], hp = h?.seats[i];
@@ -111,16 +126,16 @@ export class Scene {
       if (!hp || hp.folded) { this.hole[i] = []; return; }
       const arr = this.hole[i];
       const n = hp.hole.length;
-      if (i === s.seat && arr.some((o, j) => o.c !== hp.hole[j])) this.selected.clear();
+      if (i === this.me && arr.some((o, j) => o.c !== hp.hole[j])) this.selected.clear();
       arr.length = Math.min(arr.length, n);
       hp.hole.forEach((c, j) => {
-        const open = hp.shown && i !== s.seat;
+        const open = (hp.shown || s.spectating) && i !== this.me;
         const t = this.holePos(i, j, n, open);
         const o = arr[j] ?? (arr[j] = newCard(c, t, t.s));
         o.b = s.seats[i]?.back ?? 0;
         o.c = c;
         Object.assign(o, { x: t.x, y: t.y, s: t.s, rot: 0, sx: 1, a: 1, face: c >= 0 });
-        if (i === s.seat) o.lift = this.selected.has(j) ? -6 : 0;
+        if (i === this.me) o.lift = this.selected.has(j) ? -6 : 0;
       });
     });
     this.boards = h.boards.map((b, r) => b.map((c, i) => {
@@ -132,7 +147,7 @@ export class Scene {
 
   /** Tap on own cards toggles lift / selection. */
   hit(x: number, y: number): boolean {
-    if (this.me < 0) return false;
+    if (this.me < 0 || this.s?.spectating) return false;
     const mine = this.hole[this.me];
     for (let j = mine.length - 1; j >= 0; j--) {
       const o = mine[j];

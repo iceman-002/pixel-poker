@@ -1,7 +1,7 @@
 // Room registry and per-connection protocol handling, independent of the transport (Node `ws` or Cloudflare).
 import { Room, send, type Member, type Sock } from './room.js';
 import { sanitizeRules } from '../shared/rules.js';
-import type { C2S } from '../shared/protocol.js';
+import type { C2S, RoomSummary } from '../shared/protocol.js';
 
 export interface HubOpts { handDelay?: number; grace?: number }
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -38,6 +38,7 @@ export class Hub {
       if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
       const err = (e: string) => send(ws, { t: 'error', msg: e });
       if (msg.t === 'ping') return send(ws, { t: 'pong' });
+      if (msg.t === 'list') return send(ws, { t: 'rooms', rooms: this.list() });
       if (msg.t === 'create' || msg.t === 'join') {
         if (cur) { cur.room.detach(cur.member); cur = null; }
         if (msg.t === 'create') {
@@ -65,6 +66,18 @@ export class Hub {
     };
     const close = () => { if (cur && cur.member.ws === ws) cur.room.detach(cur.member); };
     return { message, close };
+  }
+
+  /** Public rooms with people in them and a free seat, busiest first. */
+  list(): RoomSummary[] {
+    return [...this.rooms.values()]
+      .filter((r) => r.rules.listed && r.connected() && r.seats.some((x) => !x))
+      .map((r) => ({
+        code: r.code, host: r.members.get(r.host)?.name ?? '', players: r.seats.filter(Boolean).length,
+        variant: r.rules.variant, playing: r.phase === 'playing',
+      }))
+      .sort((a, b) => b.players - a.players)
+      .slice(0, 20);
   }
 
   /** Drop rooms nobody has touched for a while. */

@@ -4,10 +4,11 @@ import { Net, type NetStatus } from './net';
 import { Scene, W, H } from './scene';
 import { Animator } from './anim';
 import { drawScene } from './render';
+import { carpetTile, applyCarpetCss } from './table';
 import { floorAsHand } from './flooranim';
 import { Controls } from './controls';
-import { Lobby, renderHome } from './lobby';
-import { settings, saveSettings } from './settings';
+import { Lobby, renderHome, showRooms } from './lobby';
+import { settings, saveSettings, profile, saveProfile } from './settings';
 import { sfx } from './audio';
 
 const app = document.getElementById('app')!;
@@ -16,7 +17,7 @@ app.innerHTML = `
     <canvas id="cv"></canvas>
     <div id="hud" class="layer" hidden>
       <div class="top"><button class="btn sm" id="tcode"></button><span id="tlevel"></span>
-        <button class="btn sm" id="tset">SET</button><button class="btn sm red" id="tleave">X</button></div>
+        <button class="btn sm" id="tlog">LOG</button><button class="btn sm" id="tset">SET</button><button class="btn sm red" id="tleave">X</button></div>
       <div id="ctl"></div>
     </div>
     <div id="screen" class="layer"></div>
@@ -31,6 +32,9 @@ const screenEl = $('#screen');
 // --- Integer scaling when it fits, best-fit otherwise; canvas backing at scale * min(DPR, 2).
 // The stage and canvas fill the whole screen; the 195x422 scene is centred and its backdrop is extended to every edge.
 let K = 1, SC = 1, OX = 0, OY = 0, LW = W, LH = H;
+let carpetPat: CanvasPattern | null = null;
+applyCarpetCss(settings.carpet);
+addEventListener('pp-table', () => { sc.rebuildTable(); carpetPat = null; applyCarpetCss(settings.carpet); });
 function fit() {
   const w = stage.clientWidth || app.clientWidth, h = stage.clientHeight || app.clientHeight;
   const f = Math.min(w / W, h / H);
@@ -46,16 +50,11 @@ function fit() {
 function paint() {
   ctx.setTransform(K, 0, 0, K, 0, 0);
   ctx.clearRect(0, 0, LW, LH);
-  // Extend the backdrop into the margins by repeating the edge rows/columns of the table image.
-  const bg = sc.bg;
-  if (OY > 0) {
-    ctx.drawImage(bg, 0, 0, W, 1, OX, 0, W, OY + 0.5);
-    ctx.drawImage(bg, 0, H - 1, W, 1, OX, OY + H - 0.5, W, OY + 0.5);
-  }
   ctx.setTransform(K, 0, 0, K, OX * K, OY * K);
-  if (OX > 0) {
-    ctx.drawImage(bg, 0, 0, 1, H, -OX, 0, OX + 0.5, H);
-    ctx.drawImage(bg, W - 1, 0, 1, H, W - 0.5, 0, OX + 0.5, H);
+  // The carpet continues past the scene edges, aligned with the carpet baked into the table image.
+  if (OX > 0 || OY > 0) {
+    carpetPat ??= ctx.createPattern(carpetTile(settings.carpet), 'repeat');
+    if (carpetPat) { ctx.fillStyle = carpetPat; ctx.fillRect(-OX - 1, -OY - 1, LW + 2, LH + 2); }
   }
   drawScene(sc, ctx);
 }
@@ -93,7 +92,7 @@ function show(n: Scr, render?: () => void) {
     screen = n;
     screenEl.hidden = n === 'table';
     $('#hud').hidden = n !== 'table';
-    if (n === 'home') renderHome(screenEl, net, roomParam, openSettings);
+    if (n === 'home') { renderHome(screenEl, net, roomParam, openSettings); net.send({ t: 'list' }); }
     pending?.();
     pending = null;
   };
@@ -154,6 +153,11 @@ function onMsg(m: S2C) {
       if (m.s.phase === 'lobby') show('lobby', () => lobby.update(m.s));
       else show('table');
       break;
+    case 'gift':
+      void anim.gift(m.from, m.to, m.amount);
+      toast(`${m.name} gave ${m.toName} ${m.amount.toLocaleString()}`);
+      break;
+    case 'rooms': if (screen === 'home') showRooms(screenEl, m.rooms, (code) => joinRoom(code)); break;
     case 'joined': history.replaceState(null, '', `?room=${m.room}`); break;
     case 'error':
       toast(m.msg);
@@ -164,6 +168,7 @@ function onMsg(m: S2C) {
 }
 
 function onStatus(st: NetStatus) {
+  if (st === 'online' && screen === 'home') net.send({ t: 'list' });
   const el = $('#net');
   el.textContent = st === 'online' ? '' : st === 'connecting' ? 'CONNECTING...' : 'OFFLINE - RETRYING';
   el.classList.toggle('show', st !== 'online');
@@ -173,10 +178,32 @@ $('#tcode').onclick = async () => {
   try { await navigator.clipboard.writeText(`${location.origin}/?room=${sc.s?.code ?? ''}`); toast('Invite link copied'); } catch { /* ignore */ }
 };
 $('#tset').onclick = () => { sfx('click'); openSettings(); };
+$('#tlog').onclick = () => {
+  sfx('click');
+  const m = $('#modal'), log = sc.s?.log ?? [];
+  m.innerHTML = `<div class="panel"><h2>LAST ROUNDS</h2><div class="log">${log.length ? log.map((l) => `<p>${l.replace(/[&<>]/g, '')}</p>`).join('') : '<p>NO ROUNDS YET</p>'}</div>
+    <button class="btn gold" id="mclose">CLOSE</button></div>`;
+  m.classList.add('open');
+  m.onchange = null;
+  m.onclick = (e) => { if (e.target === m || (e.target as HTMLElement).id === 'mclose') m.classList.remove('open'); };
+};
+// Home screen: ask the server for open public tables every few seconds.
+setInterval(() => { if (screen === 'home' && !document.hidden) net.send({ t: 'list' }); }, 4000);
+function joinRoom(code: string) {
+  const name = (document.querySelector<HTMLInputElement>('#name')?.value.trim() || profile.name || 'Player').slice(0, 12);
+  profile.name = name;
+  saveProfile();
+  net.send({ t: 'join', room: code, name, avatar: profile.avatar, back: profile.back });
+}
 $('#tleave').onclick = () => { if (confirm('Leave the table?')) net.send({ t: 'leave' }); };
 cv.addEventListener('pointerdown', (e) => {
   const r = cv.getBoundingClientRect();
-  sc.hit((e.clientX - r.left) / SC - OX, (e.clientY - r.top) / SC - OY);
+  const x = (e.clientX - r.left) / SC - OX, y = (e.clientY - r.top) / SC - OY, s = sc.s;
+  if (sc.hit(x, y) || !s || screen !== 'table') return;
+  const seat = sc.seatAt(x, y);
+  if (seat < 0) return;
+  if (s.spectating) { sc.watch = seat; sc.sync(s, sc.recvAt, true); sfx('tap'); }
+  else if (seat !== s.seat) controls.openGive(seat);
 });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 

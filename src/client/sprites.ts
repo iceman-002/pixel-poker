@@ -1,5 +1,5 @@
 // All pixel art, generated in code from palette-indexed rows.
-import { PAL, RGB, mkCanvas, FELT, FELT_HI, FELT_LO } from './palette';
+import { PAL, mkCanvas } from './palette';
 import { textSprite } from './font';
 import { rankOf, suitOf, isJoker } from '../shared/cards.js';
 export { avatar } from './avatars';
@@ -145,34 +145,3 @@ export const LAMP = fromRows([
   '......5......', '......5......', '....33333....', '...3333333...',
   '..333333333..', '.33333333333.', '3333333333333', '...aaaaaaa...',
 ], { '5': 5, '3': 3, a: 10 });
-
-// --- Static table background: dithered backdrop, stadium table with rail, felt noise.
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-export function buildTable(W: number, H: number): HTMLCanvasElement {
-  const c = mkCanvas(W, H);
-  const x = c.getContext('2d')!;
-  const img = x.createImageData(W, H);
-  const put = (px: number, py: number, k: number) => {
-    const o = (py * W + px) * 4, [r, g, b] = RGB[k];
-    img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
-  };
-  const cx = 97.5, top = 123.5, bot = 212.5;
-  for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
-    const dy = py + 0.5 < top ? py + 0.5 - top : py + 0.5 > bot ? py + 0.5 - bot : 0;
-    const d = Math.hypot(px + 0.5 - cx, dy);
-    let k: number;
-    if (d > 88) k = BAYER[(py % 4) * 4 + (px % 4)] / 16 < 0.25 + (py / H) * 0.35 ? 1 : 0;
-    else if (d > 87) k = 0;
-    else if (d > 82) k = (d > 85.5 && py < 180) || ((px * 7 + py * 3) % 23 === 0) ? 9 : 4;
-    else if (d > 81) k = 2;
-    else if (d > 78) k = FELT_LO;
-    else if (d > 74 && d <= 75) k = (px + py) % 3 ? FELT_LO : FELT;
-    else k = ((px * 73856093) ^ (py * 19349663)) % 11 === 0 ? FELT_HI : FELT;
-    put(px, py, k);
-  }
-  x.putImageData(img, 0, 0);
-  x.globalAlpha = 0.5;
-  x.drawImage(textSprite('PIXEL POKER', FELT_HI), Math.round(cx - 21), 224);
-  x.globalAlpha = 1;
-  return c;
-}

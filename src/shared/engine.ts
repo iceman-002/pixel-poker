@@ -226,9 +226,10 @@ export function autoAction(h: Hand, seat: number): Action {
 }
 
 /** Per-player view: hides other hole cards (until shown) and the deck. */
-export function viewFor(h: Hand, seat: number): Omit<Hand, 'deck' | 'muck' | 'events'> {
+/** Hide other players' unshown cards (unless `all`, used for spectators who are out of the game). */
+export function viewFor(h: Hand, seat: number, all = false): Omit<Hand, 'deck' | 'muck' | 'events'> {
   const { deck: _d, muck: _m, events: _e, ...rest } = h;
   const v = structuredClone(rest);
-  v.seats.forEach((p, i) => { if (p && i !== seat && !p.shown) p.hole = p.hole.map(() => HIDDEN); });
+  if (!all) v.seats.forEach((p, i) => { if (p && i !== seat && !p.shown) p.hole = p.hole.map(() => HIDDEN); });
   return v;
 }

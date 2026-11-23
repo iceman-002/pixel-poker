@@ -21,6 +21,10 @@ export type C2S =
   | { t: 'start' }
   | { t: 'act'; action: Action | FAction }
   | { t: 'rebuy' }
+  | { t: 'give'; seat: number; amount: number }
+  | { t: 'addbot' }
+  | { t: 'kick'; id: string }
+  | { t: 'list' }
   | { t: 'leave' }
   | { t: 'ping' };
 
@@ -29,8 +33,11 @@ export type FloorView = ReturnType<typeof floorView>;
 
 export interface SeatView {
   id: string; name: string; avatar: number; back: number; stack: number;
-  connected: boolean; ready: boolean; rebuys: number;
+  connected: boolean; ready: boolean; rebuys: number; bot: boolean;
 }
+
+/** One row of the public OPEN TABLES list. */
+export interface RoomSummary { code: string; host: string; players: number; variant: Rules['variant']; playing: boolean }
 
 export interface MemberView { id: string; name: string; avatar: number; connected: boolean; seat: number }
 
@@ -55,12 +62,16 @@ export interface RoomView {
   timeLeft: number; // ms remaining for the active player, 0 = no timer
   timerMs: number;
   canRebuy: boolean;
+  spectating: boolean; // out of the game or watching: sees every player's cards
+  log: string[]; // recent round recaps, newest first
 }
 
 /** Server -> client. `ev` holds hand events since the previous state, for animation. */
 export type S2C =
   | { t: 'joined'; room: string; token: string; id: string }
   | { t: 'state'; s: RoomView; ev: (Ev | FEv)[] }
+  | { t: 'gift'; from: number; to: number; amount: number; name: string; toName: string }
+  | { t: 'rooms'; rooms: RoomSummary[] }
   | { t: 'error'; msg: string }
   | { t: 'left' }
   | { t: 'pong' };

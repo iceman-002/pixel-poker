@@ -21,6 +21,7 @@ export interface Rules {
   wild: Wild;
   timer: number; // 0 = off, else seconds
   goal: number; // Floor Deal: first to reach this wins (0 = no target)
+  listed: boolean; // shown in the public OPEN TABLES list
 }
 
 export interface Level { sb: number; bb: number; ante: number }
@@ -43,7 +44,7 @@ export const VARIANTS: Record<Variant, VariantDef> = {
 export const DEFAULT_RULES: Rules = {
   variant: 'floor', betting: 'nl', stack: 50000, sb: 5, bb: 10, ante: 0, straddle: false,
   blindMode: 'static', blindEvery: 10, rebuys: false, maxRebuys: 3, runItTwice: false,
-  bombEvery: 0, wild: 'none', timer: 30, goal: 1000000,
+  bombEvery: 0, wild: 'none', timer: 30, goal: 1000000, listed: true,
 };
 
 const POKER: Rules = { ...DEFAULT_RULES, variant: 'holdem', stack: 1000, rebuys: true, goal: 0 };
@@ -93,6 +94,7 @@ export function sanitizeRules(raw: Partial<Record<keyof Rules, unknown>>): Rules
     wild: pick(raw.wild, OPTIONS.wild, d.wild),
     timer: pick(int(raw.timer, 0, 60, d.timer), OPTIONS.timer, d.timer),
     goal: int(raw.goal, 0, 1_000_000_000, d.goal),
+    listed: bool(raw.listed, d.listed),
   };
 }
 

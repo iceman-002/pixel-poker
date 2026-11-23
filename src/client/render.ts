@@ -3,6 +3,7 @@ import { PAL } from './palette';
 import { drawText, textWidth } from './font';
 import { cardFace, cardBack, avatar, drawChips, drawTowers, towersWidth, LAMP, DEALER, CROWN } from './sprites';
 import { settings } from './settings';
+import { FELTS } from './table';
 import { Scene, W, H, CENTER, POT, DECK, fmt, towerPos, type CardObj, type P, type Bubble } from './scene';
 
 function label(ctx: CanvasRenderingContext2D, str: string, x: number, y: number, c: number) {
@@ -126,7 +127,7 @@ export function drawScene(sc: Scene, ctx: CanvasRenderingContext2D) {
     drawTowers(ctx, POT.x - 7, POT.y + 6, sc.pot.n, 4, 12);
     drawText(ctx, (s.floor ? 'FLOOR ' : 'POT ') + fmt(sc.pot.n), 97, 113, 10, 'c', 1, 0);
   }
-  if (s.floor && s.rules.goal) drawText(ctx, 'FIRST TO ' + fmt(s.rules.goal) + ' WINS', 97, 236, 17, 'c');
+  if (s.floor && s.rules.goal) drawText(ctx, 'FIRST TO ' + fmt(s.rules.goal) + ' WINS', 97, 236, FELTS[settings.felt]?.c[1] ?? 17, 'c');
   sc.fx.forEach((f, i) => {
     if (f.bet.n <= 0 || !s.seats[i]) return;
     const b = sc.betPos(i);

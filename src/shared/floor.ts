@@ -254,9 +254,9 @@ export function autoFloor(f: Floor, seat: number): FAction {
   }
 }
 
-export function floorView(f: Floor, seat: number): Omit<Floor, 'deck' | 'events'> {
+export function floorView(f: Floor, seat: number, all = false): Omit<Floor, 'deck' | 'events'> {
   const { deck: _d, events: _e, ...rest } = f;
   const v = structuredClone(rest);
-  v.seats.forEach((p, i) => { if (p && i !== seat && !p.shown) p.hole = p.hole.map(() => HIDDEN); });
+  if (!all) v.seats.forEach((p, i) => { if (p && i !== seat && !p.shown) p.hole = p.hole.map(() => HIDDEN); });
   return v;
 }

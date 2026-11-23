@@ -43,7 +43,7 @@ export class Animator {
   private async settle() { await Promise.all(this.pending); this.pending = []; }
 
   private async play({ s, ev }: Item) {
-    this.sc.me = s.seat;
+    this.sc.me = this.sc.bottom(s);
     // Hide the stale turn ring while streets / showdown animate.
     if (this.sc.s?.hand && ev.some((e) => ['street', 'showdown', 'deal', 'fdeal', 'fpay', 'fduel', 'fboss'].includes(e.t))) this.sc.s.hand.toAct = -1;
     if (ev.some((e) => e.t === 'deal' || e.t === 'fdeal')) { this.sc.resetHand(); this.sc.dim.v = 0; this.sc.pot.set(0, true); }
@@ -110,7 +110,7 @@ export class Animator {
     const ps: Promise<void>[] = [];
     let k = 0;
     for (let j = 0; j < n; j++) for (const seat of order) {
-      const o = newCard(seat === s.seat ? h.seats[seat]!.hole[j] : -1, DECK);
+      const o = newCard(seat === sc.me || s.spectating ? h.seats[seat]!.hole[j] : -1, DECK, 0.6, s.seats[seat]?.back ?? 0);
       o.rot = -Math.PI * 1.5;
       sc.hole[seat][j] = o;
       const t = sc.holePos(seat, j, n, false);
@@ -119,7 +119,8 @@ export class Animator {
       k++;
     }
     await Promise.all(ps);
-    if (s.seat >= 0) await Promise.all(sc.hole[s.seat].map((o, j) => sc.flip(o, j * 0.08)));
+    if (s.spectating) { sc.sync(s, performance.now(), true); return; }
+    if (sc.me >= 0) await Promise.all(sc.hole[sc.me].map((o, j) => sc.flip(o, j * 0.08)));
   }
 
   /** 5-card draw: discards fly to the muck, kept cards close ranks, replacements deal in (and flip for you). */
@@ -252,6 +253,20 @@ export class Animator {
     }
     await this.wait(0.4);
     await sc.tw.to(sc.dim, { v: 0 }, 0.4);
+  }
+
+  /** A chip gift: chips arc from the giver's seat to the receiver's. */
+  async gift(from: number, to: number, amt: number) {
+    const sc = this.sc, a = sc.seatPos(from), b = sc.seatPos(to);
+    const fl = { fx: a.x, fy: a.y, tx: b.x, ty: b.y, k: 0, amt, trail: true };
+    sc.flyers.push(fl);
+    sc.bubble(from, 'GIFT!', 11);
+    sfx('chip');
+    await sc.tw.to(fl, { k: 1 }, 0.7, E.inOutQuad);
+    sc.flyers = sc.flyers.filter((x) => x !== fl);
+    sc.px.sparkle(b.x, b.y, 14);
+    sc.bubble(to, '+' + fmt(amt), 11);
+    sfx('win');
   }
 
   /** Pot sweeps to the winner with a sparkle trail; stack counts up. */

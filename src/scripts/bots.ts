@@ -54,7 +54,7 @@ class Bot {
     this.s = s;
     [...(s.hand?.seats ?? []), ...(s.floor?.seats ?? [])].forEach((p, i, arr) => {
       if (s.floor && arr.length > 8) i -= (s.hand?.seats.length ?? 0);
-      if (p && i !== s.seat && !p.shown && p.hole.some((c) => c !== -1)) fail(`${this.name} saw seat ${i} hole cards`);
+      if (!s.spectating && p && i !== s.seat && !p.shown && p.hole.some((c) => c !== -1)) fail(`${this.name} saw seat ${i} hole cards`);
     });
     if (this === bots[0]) observe(s, ev);
     if (s.canRebuy && this.rebuyHand !== s.handNo) { this.rebuyHand = s.handNo; this.send({ t: 'rebuy' }); }

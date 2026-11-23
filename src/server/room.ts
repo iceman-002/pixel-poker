@@ -1,7 +1,9 @@
-import { startHand, applyAction, autoAction, legal, viewFor, type Hand, type Action, type Ev } from '../shared/engine.js';
-import { startFloor, applyFloor, autoFloor, floorLegal, floorView, type Floor, type FAction, type FEv } from '../shared/floor.js';
+import { startHand, applyAction, autoAction, type Hand, type Action, type Ev } from '../shared/engine.js';
+import { startFloor, applyFloor, autoFloor, type Floor, type FAction, type FEv } from '../shared/floor.js';
 import { DEFAULT_RULES, sanitizeRules, levelAt, type Rules } from '../shared/rules.js';
 import { MAX_SEATS, MAX_NAME, AVATAR_MAX, CARD_BACKS, type C2S, type RoomView, type S2C } from '../shared/protocol.js';
+import { giveChips, recap, addBot, kickBot, botAct } from './extras.js';
+import { roomView } from './view.js';
 
 /** Minimal socket shape shared by Node's `ws` and the Workers WebSocket. */
 export interface Sock { readyState: number; send(data: string): void; close(code?: number, reason?: string): void }
@@ -10,7 +12,7 @@ const randomInt = (n: number) => crypto.getRandomValues(new Uint32Array(1))[0] %
 
 export interface Member {
   id: string; token: string; name: string; avatar: number; back: number; seat: number;
-  stack: number; bought: boolean; rebuys: number; skips: number; ready: boolean; ws: Sock | null; leaving: boolean;
+  stack: number; bought: boolean; rebuys: number; skips: number; ready: boolean; ws: Sock | null; leaving: boolean; bot: boolean;
 }
 export interface RoomOpts { handDelay: number; grace: number }
 type Game = { done: boolean; toAct: number; events: unknown[]; seats: ({ id: string; stack: number } | null)[] };
@@ -33,20 +35,21 @@ export class Room {
   dealer = -1;
   startedAt = 0;
   lastActive = Date.now();
+  log: string[] = [];
   private evSent = 0;
-  private deadline = 0;
-  private timerMs = 0;
+  deadline = 0;
+  timerMs = 0;
   private actTimer?: NodeJS.Timeout;
   private nextTimer?: NodeJS.Timeout;
 
   constructor(public code: string, private opts: RoomOpts) {}
 
-  private game(): Game | null { return this.floor ?? this.hand; }
+  game(): Game | null { return this.floor ?? this.hand; }
 
   addMember(name: unknown, avatar: unknown, back: unknown): Member {
     const m: Member = {
       id: randomUUID().slice(0, 8), token: randomUUID(), name: cleanName(name), avatar: cleanAvatar(avatar), back: cleanBack(back),
-      seat: -1, stack: 0, bought: false, rebuys: 0, skips: 0, ready: false, ws: null, leaving: false,
+      seat: -1, stack: 0, bought: false, rebuys: 0, skips: 0, ready: false, ws: null, leaving: false, bot: false,
     };
     this.members.set(m.id, m);
     if (!this.host) this.host = m.id;
@@ -67,19 +70,19 @@ export class Room {
   connected = () => [...this.members.values()].some((m) => m.ws);
 
   private isTurn = (m: Member) => { const g = this.game(); return !!g && !g.done && m.seat >= 0 && g.toAct === m.seat; };
-  private inLiveHand = (m: Member) => {
+  inLiveHand = (m: Member) => {
     if (m.seat < 0) return false;
     if (this.floor) { const p = this.floor.seats[m.seat]; return !this.floor.done && !!p && p.id === m.id && p.status !== 'skip' && p.status !== 'beaten'; }
     const p = this.hand && !this.hand.done ? this.hand.seats[m.seat] : null;
     return !!p && p.id === m.id && !p.folded;
   };
-  private levelIdx() {
+  levelIdx() {
     const r = this.rules;
     if (r.blindMode === 'hands') return Math.floor(Math.max(0, this.handNo - 1) / r.blindEvery);
     if (r.blindMode === 'minutes' && this.startedAt) return Math.floor((Date.now() - this.startedAt) / 60000 / r.blindEvery);
     return 0;
   }
-  private nextLevel(): RoomView['nextLevel'] {
+  nextLevel(): RoomView['nextLevel'] {
     const r = this.rules, L = this.levelIdx();
     if (this.phase !== 'playing' || r.blindMode === 'static' || r.variant === 'floor') return null;
     if (r.blindMode === 'hands') return { in: (L + 1) * r.blindEvery - this.handNo, unit: 'hands' };
@@ -149,6 +152,9 @@ export class Room {
         m.rebuys++;
         break;
       case 'leave': this.remove(m); break;
+      case 'give': { const e = giveChips(this, m, msg.seat, msg.amount); if (e) return e; break; }
+      case 'addbot': { const e = addBot(this, m); if (e) return e; break; }
+      case 'kick': { const e = kickBot(this, m, msg.id); if (e) return e; break; }
       default: return;
     }
     this.broadcast();
@@ -187,6 +193,9 @@ export class Room {
     clearTimeout(this.actTimer);
     for (const m of [...this.members.values()]) if (m.leaving) { m.leaving = false; this.remove(m); }
     if (this.phase !== 'playing') return;
+    for (const b of this.members.values()) {
+      if (b.bot && b.seat >= 0 && b.stack === 0 && this.rules.rebuys && b.rebuys < this.rules.maxRebuys) { b.stack = this.rules.stack; b.rebuys++; }
+    }
     const live = this.seats.map((id) => { const m = id ? this.members.get(id) : undefined; return m && m.stack > 0 ? m : null; });
     const alive = live.filter((x): x is Member => !!x);
     const goal = this.rules.goal > 0 ? alive.find((x) => x.stack >= this.rules.goal) : undefined;
@@ -210,12 +219,13 @@ export class Room {
     this.afterAction();
   }
 
-  private afterAction() {
+  afterAction() {
     const g = this.game()!;
     clearTimeout(this.actTimer);
     if (g.done) {
       for (const p of g.seats) { const m = p && this.members.get(p.id); if (m) m.stack = p.stack; }
       if (this.floor) for (const p of this.floor.seats) { const m = p && this.members.get(p.id); if (m) m.skips = p.skips; }
+      this.log = [recap(this), ...this.log].slice(0, 15);
       this.deadline = this.timerMs = 0;
       const delay = this.opts.handDelay * (this.hand && this.hand.boards.length > 1 ? 1.5 : 1);
       this.nextTimer = setTimeout(() => this.nextHand(), delay);
@@ -230,6 +240,11 @@ export class Room {
     const seat = g.toAct;
     const m = this.members.get(g.seats[seat]!.id);
     let ms = this.rules.timer * 1000;
+    if (m?.bot && !m.leaving && this.connected()) {
+      this.deadline = this.timerMs = 0;
+      this.actTimer = setTimeout(() => { if (this.game() === g) { botAct(this, seat); this.afterAction(); } }, 900 + randomInt(1300));
+      return;
+    }
     if (!m || m.leaving) ms = 50;
     else if (!m.ws) ms = ms ? Math.min(ms, this.opts.grace) : this.opts.grace;
     this.timerMs = ms;
@@ -243,39 +258,7 @@ export class Room {
     }, ms);
   }
 
-  view(m: Member): RoomView {
-    const h = this.hand, f = this.floor, g = this.game();
-    return {
-      code: this.code,
-      host: this.host,
-      phase: this.phase,
-      rules: this.rules,
-      seats: this.seats.map((id, i) => {
-        const s = id ? this.members.get(id) : undefined;
-        if (!s) return null;
-        const gp = g && !g.done ? g.seats[i] : null;
-        return {
-          id: s.id, name: s.name, avatar: s.avatar, back: s.back, stack: gp && gp.id === s.id ? gp.stack : s.stack,
-          connected: !!s.ws, ready: s.ready, rebuys: s.rebuys,
-        };
-      }),
-      members: [...this.members.values()].map((x) => ({ id: x.id, name: x.name, avatar: x.avatar, connected: !!x.ws, seat: x.seat })),
-      you: m.id,
-      seat: m.seat,
-      hand: h ? viewFor(h, m.seat) : null,
-      floor: f ? floorView(f, m.seat) : null,
-      flegal: f && m.seat >= 0 && f.seats[m.seat]?.id === m.id ? floorLegal(f, m.seat) : null,
-      winner: this.winner,
-      handNo: this.handNo,
-      legal: h && m.seat >= 0 && h.seats[m.seat]?.id === m.id ? legal(h, m.seat) : null,
-      level: levelAt(this.rules, this.levelIdx()),
-      levelIdx: this.levelIdx(),
-      nextLevel: this.nextLevel(),
-      timeLeft: this.deadline ? Math.max(0, this.deadline - Date.now()) : 0,
-      timerMs: this.timerMs,
-      canRebuy: this.rules.rebuys && m.seat >= 0 && m.stack === 0 && m.rebuys < this.rules.maxRebuys && !this.inLiveHand(m),
-    };
-  }
+  view(m: Member): RoomView { return roomView(this, m); }
 
   broadcast() {
     const g = this.game();
@@ -283,6 +266,8 @@ export class Room {
     if (g) this.evSent = g.events.length;
     for (const m of this.members.values()) send(m.ws, { t: 'state', s: this.view(m), ev: ev as (Ev | FEv)[] });
   }
+
+  sendAll(msg: S2C) { for (const x of this.members.values()) send(x.ws, msg); }
 
   dispose() { clearTimeout(this.actTimer); clearTimeout(this.nextTimer); }
 }

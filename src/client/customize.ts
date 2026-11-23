@@ -3,6 +3,8 @@ import { decodeAvatar, encodeAvatar, STYLES, SKINS, EXTRAS, avatar, type AvSpec 
 import { BACKS, FACES, cardBack, cardFace } from './sprites';
 import { profile, saveProfile, settings, saveSettings } from './settings';
 import { sfx } from './audio';
+import { CARPETS, FELTS, carpetTile } from './table';
+import { PAL } from './palette';
 
 function pix(src: HTMLCanvasElement, cls: string): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -34,6 +36,8 @@ export function openCustomize(onDone: () => void) {
       <button class="btn sm" id="rnd">RANDOM</button>
       <h3>CARD BACK</h3><div class="grid" id="backs"></div>
       <h3>CARD FACE</h3><div class="grid faces" id="faces"></div>
+      <h3>CARPET <b id="cname"></b></h3><div class="grid carpets" id="carpets"></div>
+      <h3>TABLE FELT <b id="fname"></b></h3><div class="grid felts" id="felts"></div>
       <button class="btn gold" id="cdone">DONE</button>
     </div>`;
   const $ = (id: string) => m.querySelector<HTMLElement>('#' + id)!;
@@ -46,6 +50,10 @@ export function openCustomize(onDone: () => void) {
     for (const p of PARTS) $('pv-' + p.k).textContent = p.name(a[p.k]);
     m.querySelectorAll<HTMLElement>('#backs canvas').forEach((c, i) => c.classList.toggle('sel', i === profile.back));
     m.querySelectorAll<HTMLElement>('#faces canvas').forEach((c, i) => c.classList.toggle('sel', i === settings.cardFace));
+    m.querySelectorAll<HTMLElement>('#carpets canvas').forEach((c, i) => c.classList.toggle('sel', i === settings.carpet));
+    m.querySelectorAll<HTMLElement>('#felts button').forEach((c, i) => c.classList.toggle('sel', i === settings.felt));
+    $('cname').textContent = CARPETS[settings.carpet]?.name ?? '';
+    $('fname').textContent = FELTS[settings.felt]?.name ?? '';
   };
   BACKS.forEach((_, i) => {
     const c = backCanvas(i);
@@ -56,6 +64,24 @@ export function openCustomize(onDone: () => void) {
     const c = pix(cardFace(48 + 3, settings.fourColor, false, i), 'cb');
     c.onclick = () => { settings.cardFace = i; saveSettings(); sfx('tap'); paint(); };
     $('faces').append(c);
+  });
+  const table = () => { saveSettings(); dispatchEvent(new Event('pp-table')); sfx('tap'); paint(); };
+  CARPETS.forEach((_, i) => {
+    const t = carpetTile(i), c = document.createElement('canvas');
+    c.width = c.height = 32;
+    c.className = 'cp';
+    const x = c.getContext('2d')!;
+    x.fillStyle = x.createPattern(t, 'repeat')!;
+    x.fillRect(0, 0, 32, 32);
+    c.onclick = () => { settings.carpet = i; table(); };
+    $('carpets').append(c);
+  });
+  FELTS.forEach((f, i) => {
+    const b = document.createElement('button');
+    b.className = 'felt';
+    b.style.background = `radial-gradient(${PAL[f.c[1]]}, ${PAL[f.c[0]]} 60%, ${PAL[f.c[2]]})`;
+    b.onclick = () => { settings.felt = i; table(); };
+    $('felts').append(b);
   });
   $('parts').onclick = (e) => {
     const b = (e.target as HTMLElement).closest('button');
